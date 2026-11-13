@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "litematica_extra",
+  "version": "${version}",
+  "name": "Litematica extra",
+  "description": "Edit Litematica schematics in 3D inside real Minecraft Creative worlds.",
+  "icon": "assets/litematica_extra/icon.png",
+  "environment": "client",
+  "authors": ["giahoki"],
+  "license": "MIT",
+  "entrypoints": {"client":["me.giahoki.litematicaextra.ExtraClient"]},
+  "mixins": ["litematica-extra.mixins.json"],
+  "depends": { "fabricloader": ">=${loader}", "minecraft": "${minecraft}", "java": ">=21", "fabric-api": "*", "litematica": ">=${litematica}", "malilib": ">=${malilib}" }
+}

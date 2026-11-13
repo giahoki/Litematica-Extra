@@ -1,0 +1,7 @@
+pluginManagement {
+    repositories { maven { url = 'https://maven.fabricmc.net/' }; gradlePluginPortal(); mavenCentral() }
+    plugins {
+        id 'fabric-loom' version (providers.gradleProperty('minecraftVersion').orNull == '1.21.11' ? '1.17.20' : '1.14.10')
+    }
+}
+rootProject.name = 'litematica-extra'

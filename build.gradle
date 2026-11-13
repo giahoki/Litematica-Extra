@@ -1,0 +1,152 @@
+plugins { id 'fabric-loom' }
+version = '0.5.2'
+group = 'me.giahoki.litematicaextra'
+def defaultMinecraft = '1.21.8'
+def minecraftVersion = providers.gradleProperty('minecraftVersion').getOrElse(defaultMinecraft)
+def targets = [
+    '1.21'   : ['1.21+build.9', '0.102.0+1.21', '0.19.61', '0.21.10'],
+    '1.21.1' : ['1.21.1+build.3', '0.116.18+1.21.1', '0.19.61', '0.21.10'],
+    '1.21.2' : ['1.21.2+build.1', '0.106.1+1.21.2', '0.20.9', '0.22.8'],
+    '1.21.3' : ['1.21.3+build.2', '0.114.1+1.21.3', '0.20.9', '0.22.8'],
+    '1.21.4' : ['1.21.4+build.8', '0.119.4+1.21.4', '0.21.7', '0.23.5'],
+    '1.21.5' : ['1.21.5+build.1', '0.128.2+1.21.5', '0.22.5', '0.24.3'],
+    '1.21.6' : ['1.21.6+build.1', '0.128.2+1.21.6', '0.23.7', '0.25.7'],
+    '1.21.7' : ['1.21.7+build.8', '0.129.0+1.21.7', '0.23.7', '0.25.7'],
+    '1.21.8' : ['1.21.8+build.1', '0.136.1+1.21.8', '0.23.7', '0.25.7'],
+    '1.21.9' : ['1.21.9+build.1', '0.134.1+1.21.9', '0.24.9', '0.26.8'],
+    '1.21.10': ['1.21.10+build.3', '0.138.4+1.21.10', '0.24.9', '0.26.8'],
+    '1.21.11': ['1.21.11+build.6', '0.141.6+1.21.11', '0.26.16', '0.27.20']
+]
+if (!targets.containsKey(minecraftVersion)) {
+    throw new GradleException("Unknown Minecraft target: ${minecraftVersion}")
+}
+def (yarnVersion, fabricApiVersion, litematicaVersion, malilibVersion) = targets[minecraftVersion]
+def loaderVersion = minecraftVersion == '1.21.11' ? '0.19.3' : '0.18.4'
+if (providers.gradleProperty('testUniversal').isPresent()) loaderVersion = '0.19.3'
+def minecraftPatch = minecraftVersion.tokenize('.').size() == 3 ? minecraftVersion.tokenize('.')[2].toInteger() : 0
+def modernGui = minecraftPatch >= 6
+base { archivesName = minecraftVersion == defaultMinecraft ? 'litematica-extra' : "litematica-extra-mc${minecraftVersion}" }
+if (minecraftVersion != defaultMinecraft) {
+    layout.buildDirectory.set(layout.projectDirectory.dir("build/mc${minecraftVersion}"))
+    loom.runs.configureEach { runDir "runs/${minecraftVersion}" }
+}
+repositories { maven { url = 'https://api.modrinth.com/maven' } }
+if (providers.gradleProperty('testUniversal').isPresent()) {
+    def productionMods = configurations.create('universalTestMods') {
+        transitive = false
+    }
+    dependencies {
+        universalTestMods "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
+        universalTestMods "maven.modrinth:litematica:${litematicaVersion}"
+        universalTestMods "maven.modrinth:malilib:${malilibVersion}"
+    }
+    tasks.register('runUniversalClient', net.fabricmc.loom.task.prod.ClientProductionRunTask) {
+        mods.from(productionMods, layout.projectDirectory.file("build/universal/litematica-extra-${project.version}-universal.jar"))
+        runDir.set(layout.projectDirectory.dir("runs/universal-${minecraftVersion}"))
+        javaLauncher.set(javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) })
+    }
+}
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraftVersion}"
+    mappings "net.fabricmc:yarn:${yarnVersion}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${loaderVersion}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
+    modImplementation "maven.modrinth:litematica:${litematicaVersion}"
+    modImplementation "maven.modrinth:malilib:${malilibVersion}"
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+java { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21; withSourcesJar() }
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.release = 21 }
+test { useJUnitPlatform() }
+sourceSets {
+    main {
+        java.srcDir(minecraftPatch >= 9 ? 'src/compat/recent/java' : modernGui ? 'src/compat/modern/java' : minecraftPatch >= 2 ? 'src/compat/legacy/java' : 'src/compat/first-release/java')
+        if (minecraftPatch >= 2 && minecraftPatch < 11) java.srcDir('src/compat/classic-world/java')
+        java.srcDir(minecraftPatch >= 5 ? 'src/compat/new-chunk/java' : 'src/compat/old-chunk/java')
+        if (minecraftPatch == 11) {
+            java.srcDir('src/compat/latest/java')
+            java.srcDir('src/compat/latest-mixins/java')
+        } else {
+            java.srcDir('src/compat/vanilla-data/java')
+            java.srcDir('src/compat/common-button/java')
+            if (minecraftPatch >= 2) java.srcDir('src/compat/classic-widgets/java')
+            if (minecraftPatch >= 9) java.srcDir('src/compat/recent-camera/java')
+        }
+        if (modernGui) java.srcDir('src/compat/gui-access/java')
+        java.srcDir(minecraftPatch >= 5 ? 'src/compat/path-api/java' : 'src/compat/file-api/java')
+        if (minecraftPatch < 11) java.srcDir(minecraftPatch >= 5 ? 'src/compat/new-model/java' : minecraftPatch == 4 ? 'src/compat/model-1.21.4/java' : minecraftPatch >= 2 ? 'src/compat/old-model/java' : 'src/compat/oldest-model/java')
+        java.srcDir(minecraftPatch >= 9 ? 'src/compat/event-input/java' : 'src/compat/classic-input/java')
+    }
+    smoke {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath
+    }
+}
+tasks.register('smokeJar', Jar) {
+    dependsOn smokeClasses
+    archiveFileName = 'studio-smoke-dev.jar'
+    destinationDirectory = layout.buildDirectory.dir('smoke')
+    from sourceSets.smoke.output
+}
+processResources {
+    def metadata = [version: project.version, minecraft: minecraftVersion, litematica: litematicaVersion, malilib: malilibVersion, loader: minecraftPatch == 11 ? loaderVersion : "0.16.14"]
+    inputs.properties(metadata)
+    filesMatching('fabric.mod.json') { expand metadata }
+    if (!modernGui) {
+        filesMatching('litematica-extra.mixins.json') { filter { it.replace('"DrawContextAccessor", ', '') } }
+    }
+}
+
+if (!providers.gradleProperty('minecraftVersion').isPresent()) {
+    def universalTools = configurations.create('universalTools')
+    dependencies {
+        add('universalTools', 'org.ow2.asm:asm-commons:9.9')
+        add('universalTools', 'net.fabricmc:fabric-loader:0.19.3')
+        add('universalTools', 'net.fabricmc:sponge-mixin:0.17.3+mixin.0.8.7')
+    }
+    def universalClasses = layout.buildDirectory.dir('universal/classes')
+    def compileUniversal = tasks.register('compileUniversal', JavaCompile) {
+        source fileTree('universal') { include '*.java' }
+        classpath = universalTools
+        destinationDirectory.set(universalClasses)
+        options.compilerArgs.add('-proc:none')
+    }
+    def remapped = tasks.named('remapJar')
+    def variantJars = []
+    def variantBuilds = []
+    def previousBuild = remapped
+    targets.keySet().each { target ->
+        if (target == defaultMinecraft) {
+            variantJars.add(remapped.flatMap { it.archiveFile })
+        } else {
+            def artifact = layout.buildDirectory.file("mc${target}/libs/litematica-extra-mc${target}-${project.version}.jar")
+            def predecessor = previousBuild
+            def child = tasks.register("buildMinecraft${target.replace('.', '_')}", Exec) {
+                mustRunAfter predecessor
+                def arguments = ["-PminecraftVersion=${target}", 'build']
+                commandLine(System.getProperty('os.name').startsWith('Windows')
+                        ? ['cmd.exe', '/d', '/c', 'gradlew.bat'] + arguments
+                        : ['./gradlew'] + arguments)
+                environment 'JAVA_HOME', System.getProperty('java.home')
+            }
+            previousBuild = child
+            variantBuilds.add(child)
+            variantJars.add(artifact)
+        }
+    }
+    def universalJar = layout.buildDirectory.file("universal/litematica-extra-${project.version}-universal.jar")
+    def packUniversal = tasks.register('universalJar', JavaExec) {
+        dependsOn compileUniversal, remapped, variantBuilds
+        classpath = files(universalClasses) + universalTools
+        mainClass = 'Pack'
+        inputs.files(variantJars)
+        inputs.file('LICENSE')
+        outputs.file(universalJar)
+        argumentProviders.add({
+            [projectDir.absolutePath, universalClasses.get().asFile.absolutePath, universalJar.get().asFile.absolutePath] +
+                    variantJars.collect { it.get().asFile.absolutePath }
+        } as CommandLineArgumentProvider)
+    }
+    tasks.named('build') { dependsOn packUniversal }
+}

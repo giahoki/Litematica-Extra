@@ -1,0 +1,40 @@
+# Local toolchains, build output and generated Gradle files
+/.jdk/
+.gradle/
+.fabric/
+build/
+out/
+bin/
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Development Minecraft instance (saves, schematics, accounts, settings)
+/run/
+/runs/
+/logs/
+/crash-reports/
+*.log
+*.hprof
+hs_err_pid*.txt
+replay_pid*.log
+
+# Local editor and machine settings
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+/local.properties
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local environment files and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx

@@ -1,0 +1,1 @@
+{"schemaVersion":1,"id":"studio_smoke_dev","version":"1.0.0","name":"Litematica extra — smoke-тесты","environment":"client","entrypoints":{"client":["me.giahoki.litematicaextra.StudioSmoke"]},"depends":{"litematica_extra":"*"}}
