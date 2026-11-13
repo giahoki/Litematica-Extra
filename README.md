@@ -6,6 +6,12 @@ Edit Litematica schematics in real Minecraft Creative worlds, preview them in 3D
 
 **Minecraft 1.21–1.21.11 · Fabric · MIT**
 
+## Downloads
+
+| Mod version | Minecraft versions | Loader | File |
+| --- | --- | --- | --- |
+| 0.5.2 | 1.21–1.21.11 (all 12 releases) | Fabric 0.19.3+ | [Download universal JAR](https://github.com/giahoki/Litematica-Extra/releases/download/0.5.2-1.21/litematica-extra-0.5.2-universal.jar) |
+
 ## Installation
 
 Install **Java 21**, **Fabric Loader 0.19.3 or newer**, and the versions of **Fabric API**, **Litematica**, and **MaLiLib** for your Minecraft release. Put the universal JAR in your client profile's `mods` folder. The same JAR selects the appropriate implementation for each supported Minecraft release.
