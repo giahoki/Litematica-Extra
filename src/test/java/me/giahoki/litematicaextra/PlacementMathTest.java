@@ -18,6 +18,20 @@ class PlacementMathTest {
         assertEquals(3,PlacementMath.snapped(2.8));assertEquals(-3,PlacementMath.snapped(-2.8));
         assertEquals(0,PlacementMath.snapped(.4));assertEquals(30_000_000,PlacementMath.snapped(1e30));
     }
+    @Test void nearlyAlignedAxisFadesThroughTheOldCutoff(){
+        assertEquals(0,PlacementMath.axisAlpha(0));
+        int beforeCutoff=PlacementMath.axisAlpha(6.9),afterCutoff=PlacementMath.axisAlpha(7.1);
+        assertTrue(beforeCutoff>=4);
+        assertTrue(afterCutoff>=beforeCutoff&&afterCutoff-beforeCutoff<=3);
+        assertTrue(PlacementMath.axisAlpha(14)>afterCutoff);
+        assertEquals(255,PlacementMath.axisAlpha(24));
+    }
+    @Test void offscreenResizeTipStaysOnItsAxisInsideTheViewport(){
+        assertEquals(0.3,PlacementMath.resizeTipFraction(100,80,300,280,200,160,20),1e-8);
+        assertEquals(0.4,PlacementMath.resizeTipFraction(100,80,-100,80,200,160,20),1e-8);
+        assertEquals(1,PlacementMath.resizeTipFraction(100,80,150,100,200,160,20));
+        assertEquals(1,PlacementMath.resizeTipFraction(10,80,-100,80,200,160,20));
+    }
     @Test void handlePickingIncludesShaftAndEndpoints(){
         assertEquals(3,PlacementMath.segmentDistance(50,3,0,0,100,0),1e-8);
         assertEquals(5,PlacementMath.segmentDistance(104,3,0,0,100,0),1e-8);

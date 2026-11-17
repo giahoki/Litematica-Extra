@@ -26,6 +26,39 @@ public final class Platform {
 
     private static final Matrix4f IDENTITY = new Matrix4f();
 
+    private static final RenderPipeline STUDIO_ROUND = RenderPipeline.builder(RenderPipelines.GUI_SNIPPET)
+            .withLocation(Identifier.of("litematica_extra", "pipeline/studio_round"))
+            .withVertexShader(Identifier.of("litematica_extra", "core/studio_round"))
+            .withFragmentShader(Identifier.of("litematica_extra", "core/studio_round"))
+            .withVertexFormat(net.minecraft.client.render.VertexFormats.POSITION_TEXTURE_COLOR,
+                    com.mojang.blaze3d.vertex.VertexFormat.DrawMode.QUADS)
+            .build();
+
+    static void drawAxisLabel(DrawContext context, net.minecraft.client.font.TextRenderer font,
+                              String label, float x, float y, float scale, int color) {
+        var matrices = context.getMatrices();
+        matrices.pushMatrix();
+        try {
+            matrices.translate(x, y);
+            matrices.scale(scale, scale);
+            context.drawText(font, label, -font.getWidth(label) / 2, -4, color, false);
+        } finally {
+            matrices.popMatrix();
+        }
+    }
+
+    static void roundedRect(DrawContext context, ScreenRect bounds, int color) {
+        float u = bounds.width() / 2f;
+        float v = bounds.height() / 2f;
+        ((DrawContextAccessor) context).studio$getState().addSimpleElement(
+                new MeshState(STUDIO_ROUND, TextureSetup.empty(), bounds, (vertices, matrix, depth) -> {
+                    texturedVertex(vertices, matrix, bounds.getLeft(), bounds.getTop(), depth, -u, -v, color);
+                    texturedVertex(vertices, matrix, bounds.getLeft(), bounds.getBottom(), depth, -u, v, color);
+                    texturedVertex(vertices, matrix, bounds.getRight(), bounds.getBottom(), depth, u, v, color);
+                    texturedVertex(vertices, matrix, bounds.getRight(), bounds.getTop(), depth, u, -v, color);
+                }));
+    }
+
     static void mesh(DrawContext context, ScreenRect bounds, Identifier texture, GuiMesh vertices) {
         var setup = texture == null ? TextureSetup.empty() : GuiTexture.setup(
                 MinecraftClient.getInstance().getTextureManager().getTexture(texture));

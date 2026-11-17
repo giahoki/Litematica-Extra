@@ -7,6 +7,11 @@ import net.minecraft.text.Text;
 abstract class PlatformScreen extends Screen {
     PlatformScreen(Text title) { super(title); }
 
+    static net.minecraft.client.font.TextRenderer studioFont(net.minecraft.client.font.TextRenderer renderer) {
+        var fonts = (me.giahoki.litematicaextra.mixin.StudioFontAccess) (Object) renderer;
+        return new net.minecraft.client.font.TextRenderer(id -> fonts.studio$getStorage(StudioTheme.FONT), false);
+    }
+
     @Override public final boolean mouseClicked(double x, double y, int button) {
         return onMouseClicked(x, y, button, () -> super.mouseClicked(x, y, button));
     }

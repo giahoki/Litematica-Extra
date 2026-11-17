@@ -19,6 +19,39 @@ public final class Platform {
     }
     static void spawn(ServerWorld world, net.minecraft.util.math.BlockPos pos) { world.setSpawnPos(pos, 180); }
 
+    static void drawAxisLabel(DrawContext context, net.minecraft.client.font.TextRenderer font,
+                              String label, float x, float y, float scale, int color) {
+        var matrices = context.getMatrices();
+        matrices.push();
+        try {
+            matrices.translate(x, y, 0);
+            matrices.scale(scale, scale, 1);
+            context.drawText(font, label, -font.getWidth(label) / 2, -4, color, false);
+        } finally {
+            matrices.pop();
+        }
+    }
+
+    static void roundedRect(DrawContext context, ScreenRect bounds, int color) {
+        SmoothGui shape = new SmoothGui();
+        double left = bounds.getLeft() + 1, right = bounds.getRight() - 1;
+        double top = bounds.getTop() + 1, bottom = bounds.getBottom() - 1;
+        double radius = Math.min(3, Math.min(right - left, bottom - top) / 2);
+        double[] cx = {right - radius, left + radius, left + radius, right - radius};
+        double[] cy = {bottom - radius, bottom - radius, top + radius, top + radius};
+        SmoothGui.P[] outline = new SmoothGui.P[24];
+        for (int corner = 0; corner < 4; corner++) {
+            for (int step = 0; step < 6; step++) {
+                double angle = (corner + step / 5.0) * Math.PI / 2;
+                outline[corner * 6 + step] = new SmoothGui.P(cx[corner] + radius * Math.cos(angle),
+                        cy[corner] + radius * Math.sin(angle));
+            }
+        }
+        shape.polygon(color, outline);
+        shape.fringe(color, .55, outline);
+        shape.submit(context, bounds);
+    }
+
     static void mesh(DrawContext context, ScreenRect bounds, Identifier texture, GuiMesh vertices) {
         var layer = texture == null ? RenderLayer.getGui() : RenderLayer.getText(texture);
         var matrix = context.getMatrices().peek().getPositionMatrix();

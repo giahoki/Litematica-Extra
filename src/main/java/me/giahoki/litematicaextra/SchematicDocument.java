@@ -39,14 +39,14 @@ public final class SchematicDocument {
 
     public SchematicDocument(Path file) throws Exception {
         source = file;
-        if (Files.size(file) > 32L * 1024 * 1024) throw new IllegalArgumentException("Файл больше 32 МБ — пока не поддерживается");
+        if (Files.size(file) > 32L * 1024 * 1024) throw new IllegalArgumentException(ExtraText.message("editor.size"));
         schematic = loadSchematic(file);
-        if (schematic == null) throw new IllegalArgumentException("Litematica не смогла прочитать схему");
+        if (schematic == null) throw new IllegalArgumentException(ExtraText.message("editor.read"));
         long volume = 0;
         for (String name : schematic.getAreaSizes().keySet()) {
             Vec3i s = schematic.getSubRegionContainer(name).getSize();
             volume += (long)s.getX()*s.getY()*s.getZ();
-            if (volume > MAX_VOLUME) throw new IllegalArgumentException("Лимит редактора: 2 млн ячеек");
+            if (volume > MAX_VOLUME) throw new IllegalArgumentException(ExtraText.message("editor.volume"));
         }
         for (String name : new TreeSet<>(schematic.getAreaSizes().keySet())) {
             var c = schematic.getSubRegionContainer(name);
@@ -107,7 +107,7 @@ public final class SchematicDocument {
                     fluids == null ? null : fluids.get(local)));
         }
         if (changes.isEmpty()) return;
-        if (changes.size() > 100_000) throw new IllegalArgumentException("За раз можно изменить до 100 000 блоков");
+        if (changes.size() > 100_000) throw new IllegalArgumentException(ExtraText.message("editor.edit_limit"));
         commit(changes);
     }
     private void commit(List<Change> changes) {
@@ -135,7 +135,7 @@ public final class SchematicDocument {
         BlockState before=state(cell);if(before.equals(value))return;
         if(cell.region==null&&!value.isAir()){
             int[] b=extraBounds(position);long volume=(long)(b[3]-b[0]+1)*(b[4]-b[1]+1)*(b[5]-b[2]+1);
-            if(originalVolume+volume>MAX_VOLUME)throw new IllegalArgumentException("Достройка превышает лимит 2 млн ячеек");
+            if(originalVolume+volume>MAX_VOLUME)throw new IllegalArgumentException(ExtraText.message("editor.expand_limit"));
         }
         BlockPos local=new BlockPos(cell.x,cell.y,cell.z);
         var entities=schematic.getBlockEntityMapForRegion(cell.region);var ticks=schematic.getScheduledBlockTicksForRegion(cell.region);var fluids=schematic.getScheduledFluidTicksForRegion(cell.region);
@@ -202,7 +202,7 @@ public final class SchematicDocument {
             }
             output.getMetadata().setEnclosingSize(new Vec3i(b[3]-b[0]+1,b[4]-b[1]+1,b[5]-b[2]+1));
         }
-        if (!SchematicFiles.write(output,directory,name,false)) throw new java.io.IOException("Не удалось сохранить копию");
+        if (!SchematicFiles.write(output,directory,name,false)) throw new java.io.IOException(ExtraText.message("studio.copy_error"));
         savedRevision = revision;
         return directory.resolve(name+".litematic");
     }

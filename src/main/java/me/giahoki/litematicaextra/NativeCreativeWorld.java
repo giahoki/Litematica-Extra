@@ -33,12 +33,14 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.*;
 import java.io.*;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
 public final class NativeCreativeWorld {
+    public static final int PHYSICS_TICK_RETRY_DELAY=20;
     private static final String LINK="litematica-extra-world.properties";
     private static volatile Session current;
     private static volatile Path lastResult;
-    private static final Map<MinecraftServer,Boolean> linkedWorlds=Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<MinecraftServer,Optional<CreativePhysics>> linkedWorlds=Collections.synchronizedMap(new WeakHashMap<>());
     enum Phase { WAITING, IMPORTING, UPDATING, READY, STOPPED, ERROR }
     private record Placed(BlockPos pos,BlockState state,NbtCompound data){}
     private record Mob(BlockPos origin,NbtCompound data){}
@@ -50,6 +52,8 @@ public final class NativeCreativeWorld {
         final List<Placed> blocks;
         final List<Mob> entities;
         final boolean newSchematic;
+        final CreativeEnvironment environment;
+        volatile CreativePhysics physics;
         volatile boolean starterVisible;
         boolean changingStarter,sourceWritten;
         long blockCount;
@@ -59,7 +63,9 @@ public final class NativeCreativeWorld {
         volatile boolean playerPrepared,announced,exporting;
         Path deleteAfterExport;
         int index,updates,ticks;
-        Session(SchematicDocument doc){
+        Session(SchematicDocument doc,CreativeEnvironment environment,CreativePhysics physics){
+            this.environment=environment;
+            this.physics=physics;
             newSchematic=false;
             source=doc.source.toAbsolutePath();folder="litematica-extra-"+UUID.randomUUID().toString().substring(0,8);
             name="Litematica extra — "+source.getFileName().toString().replaceFirst("(?i)\\.litematic$","");
@@ -72,8 +78,12 @@ public final class NativeCreativeWorld {
             for(BlockPos p:doc.occupied.keySet())expand(b,p);
             if(b[0]==Integer.MAX_VALUE){Arrays.fill(b,0);}
             int height=b[4]-b[1]+1;
-            if(height>384)throw new IllegalArgumentException("Схема выше 384 блоков — не помещается в обычный мир Minecraft");
-            int baseY=Math.min(64,320-height);offset=new BlockPos(-b[0],baseY-b[1],-b[2]);
+            int baseY=environment.dimension==net.minecraft.world.World.OVERWORLD
+                    ?Math.min(environment.baseY,environment.topY-height):environment.baseY;
+            if(baseY < (environment==CreativeEnvironment.FLAT?-60:-64)||baseY+height>environment.topY)
+                throw new IllegalArgumentException(ExtraText.message("world.environment.height"));
+            int baseX=environment==CreativeEnvironment.END?1024:0;
+            offset=new BlockPos(baseX-b[0],baseY-b[1],-b[2]);
             bounds=new int[]{b[0]+offset.getX(),b[1]+offset.getY(),b[2]+offset.getZ(),b[3]+offset.getX(),b[4]+offset.getY(),b[5]+offset.getZ()};
             blocks=new ArrayList<>(doc.occupied.size());entities=new ArrayList<>();
             for(var cell:doc.occupied.values()){
@@ -89,15 +99,20 @@ public final class NativeCreativeWorld {
                 if(list!=null)for(var entity:list)entities.add(new Mob(doc.schematic.getSubRegionPosition(region).add(offset),SchematicData.entity(entity)));
             }
         }
-        Session(Path directory){
+        Session(Path directory,CreativeEnvironment environment,CreativePhysics physics){
+            this.environment=environment;
+            this.physics=physics;
             folder="litematica-extra-"+UUID.randomUUID().toString();
-            source=directory.toAbsolutePath().resolve("Новая схема "+folder.substring(folder.length()-8)+".litematic");
+            source=directory.toAbsolutePath().resolve(ExtraText.message("world.new")+folder.substring(folder.length()-8)+".litematic");
             name=source.getFileName().toString().replace(".litematic","");
-            offset=new BlockPos(0,64,0);
-            bounds=new int[]{0,64,0,0,64,0};
+            int x=environment==CreativeEnvironment.END?1024:0;
+            offset=new BlockPos(x,environment.baseY,0);
+            bounds=new int[]{x,environment.baseY,0,x,environment.baseY,0};
             blocks=List.of();entities=List.of();newSchematic=true;
         }
         Session(Path root,Properties p){
+            environment=CreativeEnvironment.fromId(p.getProperty("environment"));
+            physics=CreativePhysics.read(p);
             source=Path.of(p.getProperty("source"));folder=root.getFileName().toString();name=p.getProperty("name","Litematica extra");
             offset=new BlockPos(Integer.parseInt(p.getProperty("ox")),Integer.parseInt(p.getProperty("oy")),Integer.parseInt(p.getProperty("oz")));
             bounds=new int[6];for(int i=0;i<6;i++)bounds[i]=Integer.parseInt(p.getProperty("b"+i));
@@ -108,35 +123,79 @@ public final class NativeCreativeWorld {
             sourceWritten=newSchematic;
         }
     }
-    public static void open(SchematicDocument doc,Screen fallback){
-        open(new Session(doc),fallback);
+    static void open(SchematicDocument doc,CreativeEnvironment environment,CreativePhysics physics,Screen fallback){
+        open(new Session(doc,environment,physics),fallback);
     }
-    public static void createEmpty(Path directory,Screen fallback)throws IOException{
+    static void createEmpty(Path directory,CreativeEnvironment environment,CreativePhysics physics,Screen fallback)throws IOException{
         Files.createDirectories(directory);
-        open(new Session(directory),fallback);
+        open(new Session(directory,environment,physics),fallback);
     }
     private static void open(Session s,Screen fallback){
         MinecraftClient client=MinecraftClient.getInstance();
-        if(client.world!=null)throw new IllegalStateException("Открой локальный мир через кнопку Litematica extra на стартовом экране");
+        if(client.world!=null)throw new IllegalStateException(ExtraText.message("world.open_from_title"));
         current=s;lastResult=null;
         var rules=WorldApi.rules();
         WorldApi.configure(rules);
         LevelInfo level=new LevelInfo(s.name,GameMode.CREATIVE,false,Difficulty.NORMAL,true,rules,DataConfiguration.SAFE_MODE);
-        client.setScreen(new MessageScreen(Text.literal(s.newSchematic?"Создание пустой схемы…":"Создание локального мира из схемы…")));
+        client.setScreen(new MessageScreen(Text.literal(s.newSchematic?ExtraText.message("world.creating"):ExtraText.message("world.loading"))));
         client.createIntegratedServerLoader().createAndStart(s.folder,level,new GeneratorOptions(0L,false,false),lookup->{
-            var flat=new FlatChunkGeneratorConfig(Optional.empty(),WorldApi.voidBiome(lookup),List.of());
-            return WorldPresets.createDemoOptions(lookup).with(lookup,new FlatChunkGenerator(flat));
+            var dimensions=WorldPresets.createDemoOptions(lookup);
+            return switch(s.environment){
+                case NETHER,END -> dimensions;
+                case FLAT -> dimensions.with(lookup,new FlatChunkGenerator(WorldApi.flatConfig(lookup)));
+                case VOID,VOID_NIGHT -> dimensions.with(lookup,new FlatChunkGenerator(
+                        new FlatChunkGeneratorConfig(Optional.empty(),WorldApi.voidBiome(lookup),List.of())));
+            };
         },fallback);
     }
     public static boolean isEditing(){Session s=current;return s!=null&&s.phase==Phase.READY&&s.server==MinecraftClient.getInstance().getServer();}
+    static CreativePhysics getPhysics(){
+        Session s=current;
+        return s!=null&&s.phase==Phase.READY&&s.server==MinecraftClient.getInstance().getServer()?s.physics:null;
+    }
+    static CompletableFuture<Boolean> updatePhysics(CreativePhysics physics){
+        Session s=current;
+        if(s==null||s.phase!=Phase.READY||s.server!=MinecraftClient.getInstance().getServer())
+            return CompletableFuture.completedFuture(false);
+        return s.server.submit(()->{
+            if(current!=s||s.phase!=Phase.READY)return false;
+            try{
+                persist(s,physics);
+                s.physics=physics;
+                linkedWorlds.put(s.server,Optional.of(physics));
+                return true;
+            }catch(IOException e){
+                LoggerFactory.getLogger("Litematica extra").warn("Could not save creative world physics",e);
+                return false;
+            }
+        });
+    }
     public static boolean physicsFrozen(net.minecraft.world.WorldView view){
-        if(!(view instanceof ServerWorld world))return false;
+        CreativePhysics physics=physicsFor(view);
+        return physics!=null&&!physics.gravity();
+    }
+    public static boolean fluidsFrozen(net.minecraft.world.WorldView view){
+        CreativePhysics physics=physicsFor(view);
+        return physics!=null&&!physics.fluids();
+    }
+    private static CreativePhysics physicsFor(net.minecraft.world.WorldView view){
+        if(!(view instanceof ServerWorld world))return null;
         MinecraftServer server=world.getServer();Session s=current;
-        if(s!=null&&s.phase!=Phase.STOPPED){
-            if(s.server==server)return true;
-            if(s.server==null&&server.getSavePath(WorldSavePath.ROOT).toAbsolutePath().normalize().getFileName().toString().equals(s.folder))return true;
-        }
-        return linkedWorlds.computeIfAbsent(server,key->Files.isRegularFile(key.getSavePath(WorldSavePath.ROOT).resolve(LINK)));
+        Path root=server.getSavePath(WorldSavePath.ROOT);
+        if(s!=null&&s.phase!=Phase.STOPPED
+                &&(s.server==server||s.server==null&&root.toAbsolutePath().normalize().getFileName().toString().equals(s.folder)))
+            return s.physics;
+        return linkedWorlds.computeIfAbsent(server,key->{
+            Path path=root.resolve(LINK);
+            if(!Files.isRegularFile(path))return Optional.empty();
+            try(var in=Files.newInputStream(path)){
+                Properties properties=new Properties();
+                properties.load(in);
+                return Optional.of(CreativePhysics.read(properties));
+            }catch(IOException failure){
+                return Optional.of(CreativePhysics.LEGACY);
+            }
+        }).orElse(null);
     }
     static ServerWorld activeWorld(){Session s=current;return s==null?null:s.world;}
     static BlockPos sourceOffset(){return current.offset;}
@@ -146,14 +205,15 @@ public final class NativeCreativeWorld {
         if(s==null||s.phase==Phase.STOPPED){
             Path root=server.getSavePath(WorldSavePath.ROOT);
             if(!Files.isRegularFile(root.resolve(LINK)))return;
-            try{Properties p=new Properties();try(var in=Files.newInputStream(root.resolve(LINK))){p.load(in);}s=new Session(root,p);s.server=server;s.world=server.getOverworld();current=s;
+            try{Properties p=new Properties();try(var in=Files.newInputStream(root.resolve(LINK))){p.load(in);}s=new Session(root,p);s.server=server;s.world=server.getWorld(s.environment.dimension);current=s;
                 WorldApi.freeze(s.world);
             }
             catch(Exception e){LoggerFactory.getLogger("Litematica extra").warn("Could not read local world link",e);return;}
         }
         if(s.server==null){
             if(!server.getSavePath(WorldSavePath.ROOT).toAbsolutePath().normalize().getFileName().toString().equals(s.folder))return;
-            s.server=server;s.world=server.getOverworld();s.phase=Phase.IMPORTING;s.world.setTimeOfDay(6000);
+            s.server=server;s.world=server.getWorld(s.environment.dimension);s.phase=Phase.IMPORTING;
+            server.getOverworld().setTimeOfDay(s.environment.time);
         }
         if(s.server!=server)return;
         try{
@@ -191,12 +251,14 @@ public final class NativeCreativeWorld {
                 if(!s.playerPrepared&&!server.getPlayerManager().getPlayerList().isEmpty()){
                     var player=server.getPlayerManager().getPlayerList().getFirst();
                     player.changeGameMode(GameMode.CREATIVE);player.getAbilities().flying=true;player.sendAbilitiesUpdate();
-                    double x=(s.bounds[0]+s.bounds[3]+1)/2.0,y=Math.min(315,s.bounds[4]+3),z=s.bounds[5]+6;
-                    WorldApi.teleport(player,s.world,x,y,z);Platform.spawn(s.world,BlockPos.ofFloored(x,y,z));s.playerPrepared=true;
+                    double x=(s.bounds[0]+s.bounds[3]+1)/2.0,y=Math.min(s.environment.topY-5,s.bounds[4]+3),z=s.bounds[5]+6;
+                    WorldApi.teleport(player,s.world,x,y,z);
+                    if(s.world==server.getOverworld())Platform.spawn(s.world,BlockPos.ofFloored(x,y,z));
+                    s.playerPrepared=true;
                 }
                 if(++s.ticks%200==0)persist(s);
             }
-        }catch(Exception e){s.phase=Phase.ERROR;LoggerFactory.getLogger("Litematica extra").error("Ошибка подготовки мира",e);}
+        }catch(Exception e){s.phase=Phase.ERROR;LoggerFactory.getLogger("Litematica extra").error("Could not prepare the world",e);}
     }
     public static void clientTick(MinecraftClient client){
         Session s=current;
@@ -207,10 +269,10 @@ public final class NativeCreativeWorld {
         }
         if(s!=null&&s.server==client.getServer()&&s.phase==Phase.READY&&s.playerPrepared&&!s.announced&&client.world!=null&&client.player!=null){
             s.announced=true;client.setScreen(null);
-            if(s.newSchematic)client.player.sendMessage(Text.literal("Поставь первый блок на морской фонарь. Фонарь исчезнет, а когда мир опустеет, появится снова."),false);
+            if(s.newSchematic)client.player.sendMessage(ExtraText.label("world.starter"),false);
             client.player.sendMessage(Text.literal(s.newSchematic
-                    ?"Esc → Сохранить и выйти. После экспорта временный мир удалится."
-                    :"Litematica extra: локальный креатив, физика блоков выключена. Esc → Сохранить .litematic. Мир остаётся в «Одиночной игре»."),false);
+                    ?ExtraText.message("world.temp_help")
+                    :ExtraText.message("world.persistent_help")),false);
         }
     }
     public static void track(ServerWorld world,BlockPos pos){
@@ -260,15 +322,13 @@ public final class NativeCreativeWorld {
         var client=MinecraftClient.getInstance();
         client.setScreen(new SaveSchematicScreen(parent,suggestedName(s),value->{
             String name=value.trim().replaceFirst("(?i)\\.litematic$","");
-            if(name.isBlank()||name.startsWith(".")||name.endsWith(".")||name.endsWith(" ")
-                    ||name.matches(".*[\\p{Cntrl}<>:\"/\\\\|?*].*")
-                    ||name.matches("(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?")){
-                return "Введи допустимое имя файла";
+            if(!validName(name)){
+                return ExtraText.message("save.name_error");
             }
-            if(current!=s||!isEditing()||s.exporting)return "Мир сейчас недоступен";
+            if(current!=s||!isEditing()||s.exporting)return ExtraText.message("world.unavailable");
             var dialog=(SaveSchematicScreen)client.currentScreen;
             save(s,name,exit,dialog);
-            return "Сохранение…";
+            return ExtraText.message("save.progress");
         }));
     }
     static void save(boolean exit){
@@ -286,13 +346,13 @@ public final class NativeCreativeWorld {
                     if(client.getServer()!=s.server||client.world==null)return;
                     if(exit){
                         if(s.newSchematic)s.deleteAfterExport=result;
-                        Platform.disconnect(client,Text.literal("Выход из локального мира Litematica extra"));
+                        Platform.disconnect(client,ExtraText.label("world.leaving"));
                     }
-                    else if(client.player!=null){client.setScreen(null);client.player.sendMessage(Text.literal("Сохранено: "+result.getFileName()),false);}
+                    else if(client.player!=null){client.setScreen(null);client.player.sendMessage(ExtraText.label("save.saved",result.getFileName().toString()),false);}
                 });
             }catch(Exception e){
                 report(e);
-                if(dialog!=null)MinecraftClient.getInstance().execute(()->dialog.failed(e.getMessage()==null?"Ошибка сохранения":e.getMessage()));
+                if(dialog!=null)MinecraftClient.getInstance().execute(()->dialog.failed(e.getMessage()==null?ExtraText.message("save.error"):e.getMessage()));
             }
             finally{s.exporting=false;}
         });
@@ -300,11 +360,11 @@ public final class NativeCreativeWorld {
     private static Path export(Session s,String name)throws Exception{
         Path result=s.source.resolveSibling(name+".litematic");
         boolean overwrite=s.newSchematic&&s.sourceWritten&&name.equals(sourceName(s));
-        if(!overwrite&&Files.exists(result))throw new IOException("Файл с таким именем уже существует");
+        if(!overwrite&&Files.exists(result))throw new IOException(ExtraText.message("save.exists"));
         for(var entity:s.world.iterateEntities())if(!(entity instanceof PlayerEntity))expand(s.bounds,entity.getBlockPos());
         int[] b=s.bounds;
         long volume=(long)(b[3]-b[0]+1)*(b[4]-b[1]+1)*(b[5]-b[2]+1);
-        if(volume>SchematicDocument.MAX_VOLUME)throw new IOException("Область больше 2 млн блоков. Мир сохранён; экспортируй нужную область средствами Litematica.");
+        if(volume>SchematicDocument.MAX_VOLUME)throw new IOException(ExtraText.message("world.export_limit"));
         AreaSelection area=new AreaSelection();area.setName(name);area.setExplicitOrigin(s.offset);
         area.addSubRegionBox(new Box(new BlockPos(b[0],b[1],b[2]),new BlockPos(b[3],b[4],b[5]),"CreativeEdit"),false);
         var handler=SchematicWorldHandler.INSTANCE;var previous=handler.getRegistryManager();
@@ -318,10 +378,15 @@ public final class NativeCreativeWorld {
             handler.setDynamicRegistryManager(previous.toImmutable());
             if(restoreStarter)setStarter(s,true);
         }
-        if(output==null)throw new IOException("Не удалось прочитать область локального мира");
-        if(!SchematicFiles.write(output,s.source.getParent(),name,overwrite))throw new IOException("Не удалось записать новую схему");
+        if(output==null)throw new IOException(ExtraText.message("world.export_read"));
+        if(!SchematicFiles.write(output,s.source.getParent(),name,overwrite))throw new IOException(ExtraText.message("world.export_write"));
         if(result.equals(s.source))s.sourceWritten=true;
         lastResult=result;persist(s);return result;
+    }
+    static boolean validName(String name){
+        return !name.isBlank()&&!name.startsWith(".")&&!name.endsWith(".")&&!name.endsWith(" ")
+                &&!name.matches(".*[\\p{Cntrl}<>:\"/\\\\|?*].*")
+                &&!name.matches("(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?");
     }
     public static void serverStopping(MinecraftServer server){
         Session s=current;if(s==null||s.server!=server)return;
@@ -338,7 +403,7 @@ public final class NativeCreativeWorld {
         try(var level=storage.createSession(s.folder)){
             level.deleteSessionLock();
         }catch(Exception e){
-            LoggerFactory.getLogger("Litematica extra").warn("Не удалось удалить временный мир {}",s.folder,e);
+            LoggerFactory.getLogger("Litematica extra").warn("Could not delete temporary world {}",s.folder,e);
         }
     }
     public static boolean isTemporaryWorld(String folder){
@@ -354,7 +419,12 @@ public final class NativeCreativeWorld {
         }
     }
     private static void persist(Session s)throws IOException{
+        persist(s,s.physics);
+    }
+    private static void persist(Session s,CreativePhysics physics)throws IOException{
         Properties p=new Properties();p.setProperty("source",s.source.toString());p.setProperty("name",s.name);
+        p.setProperty("environment",s.environment.id);
+        physics.write(p);
         if(s.newSchematic){
             p.setProperty("newSchematic","true");p.setProperty("starterVisible",Boolean.toString(s.starterVisible));
             p.setProperty("blockCount",Long.toString(s.blockCount));
@@ -362,7 +432,12 @@ public final class NativeCreativeWorld {
         p.setProperty("ox",""+s.offset.getX());p.setProperty("oy",""+s.offset.getY());p.setProperty("oz",""+s.offset.getZ());
         for(int i=0;i<6;i++)p.setProperty("b"+i,""+s.bounds[i]);
         Path path=s.server.getSavePath(WorldSavePath.ROOT).resolve(LINK);
-        try(var out=Files.newOutputStream(path)){p.store(out,"Litematica extra local creative world");}
+        Path temporary=Files.createTempFile(path.getParent(),LINK,".tmp");
+        try{
+            try(var out=Files.newOutputStream(temporary)){p.store(out,"Litematica extra local creative world");}
+            try{Files.move(temporary,path,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}
+            catch(AtomicMoveNotSupportedException ignored){Files.move(temporary,path,StandardCopyOption.REPLACE_EXISTING);}
+        }finally{Files.deleteIfExists(temporary);}
     }
     private static void report(Exception e){
         String message=e.getMessage();LoggerFactory.getLogger("Litematica extra").error("Local creative world export failed",e);

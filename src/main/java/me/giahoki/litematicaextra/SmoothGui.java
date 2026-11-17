@@ -40,19 +40,49 @@ public final class SmoothGui {
         for(int i=0;i<32;i++)triangle(center,edge[i],edge[(i+1)%32],color);
         fringe(color,.65,edge);
     }
+    public void roundedBox(double x,double y,double width,double height,double radius,int color){
+        P[] edge=new P[24];
+        for(int corner=0;corner<4;corner++){
+            double cx=x+(corner==0||corner==3?1:-1)*(width/2-radius);
+            double cy=y+(corner<2?1:-1)*(height/2-radius);
+            for(int step=0;step<6;step++){
+                double angle=(corner+step/5.0)*Math.PI/2;
+                edge[corner*6+step]=new P(cx+radius*Math.cos(angle),cy+radius*Math.sin(angle));
+            }
+        }
+        polygon(color,edge);
+        fringe(color,.4,edge);
+    }
     public static int shade(int color,double value){
         int r=(int)Math.min(255,((color>>16)&255)*value),g=(int)Math.min(255,((color>>8)&255)*value),b=(int)Math.min(255,(color&255)*value);
         return (color&0xff000000)|(r<<16)|(g<<8)|b;
     }
+    public void resizeHandle(P start,P end,int color,boolean active){
+        double dx=end.x-start.x,dy=end.y-start.y,length=Math.hypot(dx,dy);
+        if(length<1e-6)return;
+        double nx=-dy/length,ny=dx/length;
+        double half=active?1.7:1.25,outer=half+1;
+        int outline=(color&0xff000000)|0x152029;
+        quad(start.add(nx*outer,ny*outer),end.add(nx*outer,ny*outer),
+                end.add(-nx*outer,-ny*outer),start.add(-nx*outer,-ny*outer),outline);
+        quad(start.add(nx*half,ny*half),end.add(nx*half,ny*half),
+                end.add(-nx*half,-ny*half),start.add(-nx*half,-ny*half),color);
+        double width=active?11:9,height=active?8:7;
+        roundedBox(end.x,end.y,width,height,1,outline);
+        roundedBox(end.x,end.y,width-2,height-2,1,color);
+    }
     public void arrow(P start,P tip,int color,boolean active){
-        double len=Math.hypot(tip.x-start.x,tip.y-start.y);if(len<7)return;
+        double len=Math.hypot(tip.x-start.x,tip.y-start.y);if(len<1e-6)return;
         double dx=(tip.x-start.x)/len,dy=(tip.y-start.y)/len,nx=-dy,ny=dx;
-        double head=Math.min(9,len*.3),half=active?1.3:.9,wing=active?4.3:3.8;
+        double head=Math.min(10,len*.36),half=active?1.7:1.25,wing=active?5.2:4.5;
         P base=tip.add(-dx*head,-dy*head),a=start.add(nx*half,ny*half),b=base.add(nx*half,ny*half),c=base.add(-nx*half,-ny*half),d=start.add(-nx*half,-ny*half);
-        polygon(color,a,b,c,d);fringe(color,.65,a,b,c,d);
         P left=base.add(nx*wing,ny*wing),right=base.add(-nx*wing,-ny*wing);
+        int outline=(color&0xff000000)|0x152029;
+        P[] edge={a,b,left,tip,right,c,d};
+        fringe(outline,1.4,edge);
+        for(int i=0;i<edge.length;i++)disc(edge[i].x,edge[i].y,1,outline);
+        polygon(color,a,b,c,d);
         triangle(left,tip,base,shade(color,1.15));triangle(base,tip,right,shade(color,.78));
-        fringe(color,.65,left,tip,right);
     }
     public void submit(DrawContext context,ScreenRect bounds){
         if(vertices.isEmpty())return;

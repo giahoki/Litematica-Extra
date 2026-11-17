@@ -74,7 +74,7 @@ public final class StudioSmoke implements ClientModInitializer {
                 }
                 if(stage==-1&&++selectorTicks>=20&&frames.getOrDefault(client.currentScreen,0)>=3){
                     check(client.currentScreen instanceof SchematicWorldSelectScreen,"selector survives rendering with menu blur");
-                    click(Screens.getButtons(client.currentScreen).stream().filter(b->b.getMessage().getString().equals("Назад")).findFirst().orElseThrow());
+                    click(Screens.getButtons(client.currentScreen).stream().filter(b->b.getMessage().equals(ExtraText.label("back"))).findFirst().orElseThrow());
                     check(client.currentScreen instanceof TitleScreen,"back button returns to title");
                     click(Screens.getButtons(client.currentScreen).stream().filter(b->b.getMessage().getString().equals("Litematica extra")).findFirst().orElseThrow());
                     selectorTicks=0;stage=-2;
@@ -84,9 +84,20 @@ public final class StudioSmoke implements ClientModInitializer {
                     var screen=client.currentScreen;
                     screen.children().stream().filter(c->c instanceof net.minecraft.client.gui.widget.TextFieldWidget).map(c->(net.minecraft.client.gui.widget.TextFieldWidget)c).findFirst().orElseThrow().setText("studio-demo.litematic");
                     check(screen.mouseClicked(screen.width/2.0,75,0),"schematic row can be selected");
-                    var load=Screens.getButtons(screen).stream().filter(b->b.getMessage().getString().equals("Загрузить в креативе")).findFirst().orElseThrow();
+                    var load=Screens.getButtons(screen).stream().filter(b->b.getMessage().equals(ExtraText.label("world.load"))).findFirst().orElseThrow();
                     check(load.active,"load button enabled after selection");
-                    click(load);selectorTicks=0;stage=1;
+                    click(load);
+                    check(client.currentScreen instanceof CreativeEnvironmentScreen,"load opens the world picker");
+                    var environments=Screens.getButtons(client.currentScreen);
+                    for(var environment:CreativeEnvironment.values())
+                        check(environments.stream().anyMatch(b->b.getMessage().equals(ExtraText.label("world.environment."+environment.id))),
+                                "world picker offers "+environment.id);
+                    var off=net.minecraft.text.Text.translatable("options.off");
+                    check(environments.stream().anyMatch(b->b.getMessage().equals(ExtraText.label("world.physics.gravity",off))),
+                            "gravity starts disabled");
+                    click(environments.stream().filter(b->b.getMessage().equals(ExtraText.label("world.physics.fluids",off))).findFirst().orElseThrow());
+                    click(environments.stream().filter(b->b.getMessage().equals(ExtraText.label("world.environment.void"))).findFirst().orElseThrow());
+                    selectorTicks=0;stage=1;
                 }
                 if(stage==1&&NativeCreativeWorld.isEditing()&&client.world!=null&&client.player!=null&&client.interactionManager!=null&&client.currentScreen==null&&++selectorTicks>=40){
                     check(client.isIntegratedServerRunning(),"actual integrated server is running");
@@ -161,17 +172,7 @@ public final class StudioSmoke implements ClientModInitializer {
                     var placement=screen.placement();
                     screen.keyPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_R,0,0);
                     screen.keyReleased(org.lwjgl.glfw.GLFW.GLFW_KEY_R,0,0);
-                    var update=PlacementScreen.class.getDeclaredMethod("updateProjection",float.class);
-                    update.setAccessible(true);update.invoke(screen,1f);
-                    var radiusField=PlacementScreen.class.getDeclaredField("ringRadius");
-                    radiusField.setAccessible(true);
-                    double radius=radiusField.getDouble(screen);
-                    var start=project(screen,center.add(radius,0,0));
-                    var end=project(screen,center.add(0,0,radius));
-                    screen.mouseClicked(start[0],start[1],0);
-                    screen.mouseDragged(end[0],end[1],0,end[0]-start[0],end[1]-start[1]);
-                    screen.mouseReleased(end[0],end[1],0);
-                    check(placement.getRotation()==BlockRotation.CLOCKWISE_90,"ring rotates the Litematica placement");
+                    check(placement.getRotation()==BlockRotation.CLOCKWISE_90,"R rotates the Litematica placement immediately");
                     screen.close();
                     check(placement.getRotation()==BlockRotation.CLOCKWISE_90,"finished placement keeps its rotation");
                     check(client.getCameraEntity()==client.player,"camera restored to player");
@@ -216,12 +217,13 @@ public final class StudioSmoke implements ClientModInitializer {
                         try{
                             var w=NativeCreativeWorld.activeWorld();var o=NativeCreativeWorld.sourceOffset();
                             check(NativeCreativeWorld.physicsFrozen(w),"physics is frozen in editing world");
+                            check(!NativeCreativeWorld.fluidsFrozen(w),"enabled fluids are allowed to tick");
                             check(w.getBlockState(new BlockPos(12,4,12).add(o)).isOf(Blocks.SAND),"unsupported sand stays at original position");
                             check(w.getBlockState(new BlockPos(12,1,12).add(o)).isAir(),"sand did not fall onto support");
                             var gravity=new net.minecraft.block.Block[]{Blocks.GRAVEL,Blocks.ANVIL,Blocks.WHITE_CONCRETE_POWDER,Blocks.DRAGON_EGG};
                             for(int i=0;i<gravity.length;i++)check(w.getBlockState(new BlockPos(13+i,4,20).add(o)).isOf(gravity[i]),"gravity block stays suspended: "+gravity[i]);
-                            check(w.getFluidState(new BlockPos(15,1,14).add(o)).isEmpty(),"water does not spread");
-                            check(w.getBlockState(new BlockPos(20,4,20).add(o)).isOf(Blocks.LAVA)&&w.getBlockState(new BlockPos(20,3,20).add(o)).isAir(),"lava stays suspended without flowing");
+                            check(w.getFluidState(new BlockPos(15,1,14).add(o)).isIn(net.minecraft.registry.tag.FluidTags.WATER),"water flows sideways in the editing world");
+                            check(w.getFluidState(new BlockPos(20,3,20).add(o)).isIn(net.minecraft.registry.tag.FluidTags.LAVA),"lava flows down in the editing world");
                             check(w.getBlockState(new BlockPos(25,1,20).add(o)).isOf(Blocks.TORCH),"unsupported torch does not break automatically");
                             check(w.getBlockState(new BlockPos(22,1,12).add(o)).get(RedstoneLampBlock.LIT),"vanilla redstone powers lamp");
                             task.complete(null);
@@ -283,7 +285,7 @@ public final class StudioSmoke implements ClientModInitializer {
                     var w=NativeCreativeWorld.activeWorld();var o=NativeCreativeWorld.sourceOffset();
                     check(NativeCreativeWorld.physicsFrozen(w),"freeze restored after reopening saved editing world");
                     check(w.getBlockState(new BlockPos(12,4,12).add(o)).isOf(Blocks.SAND),"unsupported sand survives reopening");
-                    Files.writeString(client.runDirectory.toPath().resolve("studio-smoke-result.txt"),"PASS: Litematica placement button, detached local camera, player body unchanged, Alt toggle and hold, real X/Y/Z gizmo dragging, camera and perspective restored, Litematica Generic setting, title button, file selector rendered for 40 ticks with menu blur, back and reopen, search and row selection, load button, real integrated CREATIVE world, vanilla creative inventory, schematic import, sand/gravel/anvil/powder/dragon egg frozen, water/lava frozen, redstone works, native chest contents and suspended block export, original hash unchanged, ordinary-world sand and water unchanged, saved-world freeze restored\n");
+                    Files.writeString(client.runDirectory.toPath().resolve("studio-smoke-result.txt"),"PASS: Litematica placement button, detached local camera, player body unchanged, Alt toggle and hold, real X/Y/Z gizmo dragging, camera and perspective restored, Litematica Generic setting, title button, file selector rendered for 40 ticks with menu blur, back and reopen, search and row selection, load button, real integrated CREATIVE world, vanilla creative inventory, schematic import, sand/gravel/anvil/powder/dragon egg frozen, water/lava flow, redstone works, native chest contents and suspended block export, original hash unchanged, ordinary-world sand and water unchanged, saved-world freeze restored\n");
                     NativeCreativeWorld.save(true);stage=11;
                 }
                 if(stage==11&&client.world==null&&client.getServer()==null){client.options.pauseOnLostFocus=oldPause;stage=100;client.scheduleStop();}

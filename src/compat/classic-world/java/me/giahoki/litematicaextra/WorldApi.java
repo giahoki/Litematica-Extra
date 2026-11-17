@@ -15,6 +15,11 @@ import net.minecraft.world.GameRules;
 import net.minecraft.world.biome.BiomeKeys;
 
 final class WorldApi {
+    static net.minecraft.world.gen.chunk.FlatChunkGeneratorConfig flatConfig(RegistryWrapper.WrapperLookup lookup){
+        return net.minecraft.world.gen.chunk.FlatChunkGeneratorConfig.getDefaultConfig(
+                lookup.getOrThrow(RegistryKeys.BIOME),lookup.getOrThrow(RegistryKeys.STRUCTURE_SET),
+                lookup.getOrThrow(RegistryKeys.PLACED_FEATURE));
+    }
     static GameRules rules(){return new GameRules(DataConfiguration.SAFE_MODE.enabledFeatures());}
     static net.minecraft.registry.entry.RegistryEntry<net.minecraft.world.biome.Biome> voidBiome(RegistryWrapper.WrapperLookup lookup){return lookup.getOrThrow(RegistryKeys.BIOME).getOrThrow(BiomeKeys.THE_VOID);}
     static Entity loadEntity(NbtCompound nbt,ServerWorld world,Function<Entity,Entity> transform){return EntityType.loadEntityWithPassengers(nbt,world,SpawnReason.LOAD,transform);}

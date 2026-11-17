@@ -18,7 +18,7 @@ final class SaveSchematicScreen extends PlatformScreen {
     private TextFieldWidget input;
 
     SaveSchematicScreen(Screen parent,String name,Function<String,String> save){
-        super(Text.literal("Как назвать схему?"));
+        super(ExtraText.label("save.title"));
         this.parent=parent;
         this.name=name;
         this.save=save;
@@ -30,8 +30,8 @@ final class SaveSchematicScreen extends PlatformScreen {
         input.setMaxLength(100);
         input.setText(name);
         input.setChangedListener(value->{name=value;error="";});
-        addDrawableChild(ButtonWidget.builder(Text.literal("Сохранить"),b->submit()).dimensions(width/2-104,height/2+25,100,20).build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Отмена"),b->close()).dimensions(width/2+4,height/2+25,100,20).build());
+        addDrawableChild(ButtonWidget.builder(ExtraText.label("save.submit"),b->submit()).dimensions(width/2-104,height/2+25,100,20).build());
+        addDrawableChild(ButtonWidget.builder(ExtraText.label("cancel"),b->close()).dimensions(width/2+4,height/2+25,100,20).build());
         setInitialFocus(input);
     }
 
@@ -39,7 +39,7 @@ final class SaveSchematicScreen extends PlatformScreen {
         if(input.active)error=save.apply(name);
     }
 
-    void saving(){input.active=false;error="Сохранение…";}
+    void saving(){input.active=false;error=ExtraText.message("save.progress");}
     void failed(String message){input.active=true;error=message;}
 
     @Override public boolean shouldPause(){return false;}

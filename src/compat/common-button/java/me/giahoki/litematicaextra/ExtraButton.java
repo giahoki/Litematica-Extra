@@ -7,6 +7,8 @@ import net.minecraft.text.Text;
 
 public final class ExtraButton extends ButtonWidget {
     public enum Tone { NORMAL, ACCENT, DANGER, QUIET }
+    private net.minecraft.client.font.TextRenderer studioFont;
+    void useStudioTheme(net.minecraft.client.font.TextRenderer font) { studioFont = font; }
     private final Tone tone;
     public ExtraButton(String label,int x,int y,int width,int height,Tone tone,Runnable action){
         super(x,y,width,height,Text.literal(label),b->action.run(),DEFAULT_NARRATION_SUPPLIER);this.tone=tone;
@@ -18,6 +20,11 @@ public final class ExtraButton extends ButtonWidget {
     }
     @Override protected void renderWidget(DrawContext g,int mouseX,int mouseY,float delta){
         boolean hover=isHovered()||isFocused();
+        if(studioFont!=null){
+            StudioTheme.button(g,studioFont,getMessage().getString(),getX(),getY(),getWidth(),getHeight(),
+                    tone,active,hover,isFocused());
+            return;
+        }
         int background=switch(tone){case ACCENT->hover?0xff65e1ce:0xff46c7b5;case DANGER->hover?0xff603343:0xff34232f;case QUIET->hover?0xff283849:0xff182331;default->hover?0xff334459:0xff243244;};
         int text=tone==Tone.ACCENT?0xff082c2a:tone==Tone.DANGER?0xffffa7b4:0xffdce8f4;
         if(!active){background=0xff18212d;text=0xff536174;}

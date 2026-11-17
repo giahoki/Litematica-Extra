@@ -14,7 +14,7 @@ public class PlacementConfigMixin {
     @Inject(method="getConfigs",at=@At("RETURN"),cancellable=true,remap=false)
     private void extra$config(CallbackInfoReturnable<List<ConfigOptionWrapper>> cir){
         if(DataManager.getConfigGuiTab()==GuiConfigs.ConfigGuiTab.GENERIC){
-            PlacementSettings.init();var list=new ArrayList<>(cir.getReturnValue());
+            PlacementSettings.init();PlacementSettings.updateLabels();var list=new ArrayList<>(cir.getReturnValue());
             list.add(0,new ConfigOptionWrapper(PlacementSettings.HOLD_ALT));cir.setReturnValue(list);
         }
     }

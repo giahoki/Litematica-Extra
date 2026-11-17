@@ -13,10 +13,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class FrozenFluidsMixin {
     @Inject(method="onScheduledTick",at=@At("HEAD"),cancellable=true)
     private void extra$keepFluid(World world,BlockPos pos,CallbackInfo ci){
-        if(NativeCreativeWorld.physicsFrozen(world))ci.cancel();
-    }
-    @Inject(method="onRandomTick",at=@At("HEAD"),cancellable=true)
-    private void extra$keepLava(World world,BlockPos pos,net.minecraft.util.math.random.Random random,CallbackInfo ci){
-        if(NativeCreativeWorld.physicsFrozen(world))ci.cancel();
+        if(NativeCreativeWorld.fluidsFrozen(world)){
+            world.scheduleFluidTick(pos,((FluidState)(Object)this).getFluid(),NativeCreativeWorld.PHYSICS_TICK_RETRY_DELAY);
+            ci.cancel();
+        }
     }
 }

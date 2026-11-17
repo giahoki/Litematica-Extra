@@ -12,13 +12,15 @@ public final class PlacementSettings {
     private static boolean initialized;
     public static void init(){
         if(initialized)return;initialized=true;
-        HOLD_ALT.setPrettyName("Litematica extra: курсор при удержании Alt");
-        HOLD_ALT.setTranslatedName("Litematica extra: курсор при удержании Alt");
-        HOLD_ALT.setComment("Размещение: ВКЛ — держи Alt для курсора. ВЫКЛ — нажатие Alt переключает курсор. Камера управляется только при скрытом курсоре.");
         Properties p=new Properties();
         if(Files.isRegularFile(FILE))try(var in=Files.newInputStream(FILE)){p.load(in);HOLD_ALT.setBooleanValue(Boolean.parseBoolean(p.getProperty("placementHoldAlt","false")));}
         catch(Exception e){LoggerFactory.getLogger("litematica_extra").warn("Could not load placement settings",e);}
         HOLD_ALT.setValueChangeCallback(c->save());
+    }
+    public static void updateLabels(){
+        HOLD_ALT.setPrettyName(ExtraText.message("config.hold_alt"));
+        HOLD_ALT.setTranslatedName(ExtraText.message("config.hold_alt"));
+        HOLD_ALT.setComment(ExtraText.message("config.hold_alt.help"));
     }
     private static void save(){
         Properties p=new Properties();p.setProperty("placementHoldAlt",Boolean.toString(HOLD_ALT.getBooleanValue()));

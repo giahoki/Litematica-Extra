@@ -1,7 +1,9 @@
 package me.giahoki.litematicaextra.mixin;
 
 import me.giahoki.litematicaextra.StudioScreen;
+import me.giahoki.litematicaextra.ExtraText;
 import me.giahoki.litematicaextra.ExtraIcons;
+import me.giahoki.litematicaextra.PlacementScreen;
 import fi.dy.masa.litematica.gui.GuiMainMenu;
 import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.button.ButtonGeneric;
@@ -20,7 +22,9 @@ public abstract class LitematicaMenuMixin extends GuiBase {
     private void extra$addEditorButton(CallbackInfo ci){
         int w=getButtonWidth();
         ButtonGeneric button=new ButtonGeneric(12+w+20,52,w,20,"3D Editor",ExtraIcons.EDITOR);
-        button.setHoverStrings("Litematica extra — 3D-просмотр и редактор схем");
+        button.setHoverStrings(ExtraText.message("studio.menu_tip"));
         addButton(button,(b,mouseButton)->MinecraftClient.getInstance().setScreen(new StudioScreen((Screen)(Object)this)));
+        ButtonGeneric selection=new ButtonGeneric(12,184,w,20,ExtraText.message("selection.title"),ExtraIcons.EDITOR);
+        addButton(selection,(b,mouseButton)->PlacementScreen.openSelection());
     }
 }

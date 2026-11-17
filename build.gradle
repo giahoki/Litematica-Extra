@@ -1,5 +1,6 @@
 plugins { id 'fabric-loom' }
-version = '0.5.2'
+defaultTasks 'build'
+version = '0.7.1'
 group = 'me.giahoki.litematicaextra'
 def defaultMinecraft = '1.21.8'
 def minecraftVersion = providers.gradleProperty('minecraftVersion').getOrElse(defaultMinecraft)
@@ -125,6 +126,7 @@ if (!providers.gradleProperty('minecraftVersion').isPresent()) {
             def child = tasks.register("buildMinecraft${target.replace('.', '_')}", Exec) {
                 mustRunAfter predecessor
                 def arguments = ["-PminecraftVersion=${target}", 'build']
+                if (gradle.startParameter.offline) arguments.add('--offline')
                 commandLine(System.getProperty('os.name').startsWith('Windows')
                         ? ['cmd.exe', '/d', '/c', 'gradlew.bat'] + arguments
                         : ['./gradlew'] + arguments)
@@ -148,5 +150,5 @@ if (!providers.gradleProperty('minecraftVersion').isPresent()) {
                     variantJars.collect { it.get().asFile.absolutePath }
         } as CommandLineArgumentProvider)
     }
-    tasks.named('build') { dependsOn packUniversal }
+    tasks.named('assemble') { dependsOn packUniversal }
 }

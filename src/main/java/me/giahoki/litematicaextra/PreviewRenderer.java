@@ -18,6 +18,7 @@ public final class PreviewRenderer {
     private List<Projected> projected = List.of();
     public final OrbitCamera camera = new OrbitCamera();
     private double extent = 1;
+    private double floorY;
     public int faceCount() { return mesh.size(); }
     List<Face> mesh(){return mesh;}
     public void rebuild(SchematicDocument doc, boolean resetCamera) {
@@ -60,12 +61,13 @@ public final class PreviewRenderer {
                 float shade = switch(PreviewModel.face(q)) {case UP->1f;case DOWN->0.5f;case NORTH,SOUTH->0.78f;default->0.65f;};
                 int r=(int)(((tint>>16)&255)*shade),g=(int)(((tint>>8)&255)*shade),b=(int)((tint&255)*shade);
                 mesh.add(new Face(cell,xyz,uv,0xff000000|r<<16|g<<8|b));
-                if (mesh.size()>150_000) { mesh.clear(); throw new IllegalArgumentException("Слишком много граней (лимит 150 000). Выбери меньшую схему"); }
+                if (mesh.size()>150_000) { mesh.clear(); throw new IllegalArgumentException(ExtraText.message("editor.face_limit")); }
             }
         }
         if (resetCamera) {
             if (minX==Integer.MAX_VALUE) { minX=minY=minZ=0;maxX=maxY=maxZ=1; }
             camera.centerX=(minX+maxX)/2.0;camera.centerY=(minY+maxY)/2.0;camera.centerZ=(minZ+maxZ)/2.0;
+            floorY=minY;
             extent=Math.max(1,Math.sqrt(Math.pow(maxX-minX,2)+Math.pow(maxY-minY,2)+Math.pow(maxZ-minZ,2)));
             resetView();
         }
@@ -100,8 +102,10 @@ public final class PreviewRenderer {
         for(int i=projected.size()-1;i>=0;i--) if(OrbitCamera.contains(projected.get(i).xy,x,y)) return projected.get(i).face.cell;
         return null;
     }
-    public void draw(DrawContext context,int x,int y,int w,int h,SchematicDocument.Cell selection) {
+    public void draw(DrawContext context,int x,int y,int w,int h,SchematicDocument.Cell selection,boolean grid) {
         camera.screenX=x+w/2.0;camera.screenY=y+h/2.0;camera.scale=Math.min(w,h)*0.86/extent;
+        ScreenRect bounds=new ScreenRect(x,y,w,h);
+        if(grid) drawFloorGrid(context,bounds);
         List<Projected> out=new ArrayList<>(mesh.size());
         for(Face face:mesh) {
             float[] xy=new float[8];double depth=0;
@@ -116,11 +120,34 @@ public final class PreviewRenderer {
         }
         out.sort(Comparator.comparingDouble(Projected::depth));projected=out;
         var faces=List.copyOf(out);
-        Platform.mesh(context,new ScreenRect(x,y,w,h),SpriteAtlasTexture.BLOCK_ATLAS_TEXTURE,(vertices,matrix,depth)->{
+        Platform.mesh(context,bounds,SpriteAtlasTexture.BLOCK_ATLAS_TEXTURE,(vertices,matrix,depth)->{
             for(Projected p:faces){
-                int color=p.face.cell.equals(selection)?0xffffcc66:p.face.color;
+                int color=p.face.cell.equals(selection)?0xff73ffee:p.face.color;
                 for(int i=0;i<4;i++)Platform.texturedVertex(vertices,matrix,p.xy[i*2],p.xy[i*2+1],depth,p.face.uv[i*2],p.face.uv[i*2+1],color);
             }
         });
+    }
+
+    private void drawFloorGrid(DrawContext context,ScreenRect bounds) {
+        SmoothGui grid=new SmoothGui();
+        double radius=extent*.85;
+        double floor=floorY;
+        for(int i=-8;i<=8;i++){
+            double offset=i*radius/8;
+            gridLine(grid,camera.project(camera.centerX+offset,floor,camera.centerZ-radius),
+                    camera.project(camera.centerX+offset,floor,camera.centerZ+radius));
+            gridLine(grid,camera.project(camera.centerX-radius,floor,camera.centerZ+offset),
+                    camera.project(camera.centerX+radius,floor,camera.centerZ+offset));
+        }
+        grid.submit(context,bounds);
+        Platform.nextLayer(context);
+    }
+
+    private static void gridLine(SmoothGui grid,OrbitCamera.Point a,OrbitCamera.Point b) {
+        double length=Math.hypot(b.x()-a.x(),b.y()-a.y());
+        if(length<.01)return;
+        double dx=(b.y()-a.y())*.35/length,dy=(a.x()-b.x())*.35/length;
+        grid.quad(new SmoothGui.P(a.x()+dx,a.y()+dy),new SmoothGui.P(b.x()+dx,b.y()+dy),
+                new SmoothGui.P(b.x()-dx,b.y()-dy),new SmoothGui.P(a.x()-dx,a.y()-dy),0xff252d38);
     }
 }

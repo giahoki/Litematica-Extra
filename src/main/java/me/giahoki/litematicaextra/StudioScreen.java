@@ -24,8 +24,9 @@ import static me.giahoki.litematicaextra.ExtraButton.Tone.*;
 
 public final class StudioScreen extends PlatformScreen {
     private static final Identifier ICON=Identifier.of("litematica_extra","icon.png");
-    private static final int BG=0xff0c111b,PANEL=0xff151e2b,BORDER=0xff263347,TEXT=0xffe2ecf7,MUTED=0xff879ab3,ACCENT=0xff66dfc9;
+    private static final int BG=0xff0d1117,PANEL=0xff151a21,BORDER=StudioTheme.BORDER,TEXT=StudioTheme.TEXT,MUTED=StudioTheme.MUTED,ACCENT=StudioTheme.ACCENT;
     private final Screen parent;
+    private net.minecraft.client.font.TextRenderer studioFont;
     private final PreviewRenderer preview=new PreviewRenderer();
     private final List<Path> files=new ArrayList<>(),filtered=new ArrayList<>();
     private SchematicDocument document;
@@ -34,43 +35,52 @@ public final class StudioScreen extends PlatformScreen {
     private TextFieldWidget search,replacement;
     private ExtraButton replace,replaceAll,delete,undo,redo,save,place,playerView;
     private int left,right,rx,vx,vy,vw,vh,bottom,listY,listOffset,dragButton=-1;
-    private String status="Выбери схему в библиотеке",query="",blockInput="minecraft:stone";
+    private int zoomLabelX,zoomLabelWidth;
+    private String status=ExtraText.message("studio.choose"),query="",blockInput="minecraft:stone";
     private boolean statusError,grid=true,showHelp;
 
     public StudioScreen(){this(new GuiMainMenu());}
     public StudioScreen(Screen parent){super(Text.literal("Litematica extra"));this.parent=parent;}
     @Override protected void init(){
-        left=Math.max(96,Math.min(180,width/5));right=Math.max(124,Math.min(208,width/4));
-        rx=width-right-8;vx=left+16;vy=44;vw=Math.max(1,rx-vx-8);bottom=height-28;vh=Math.max(1,bottom-vy);listY=94;
+        studioFont=studioFont(textRenderer);
+        left=Math.max(96,width*22/100);right=Math.max(124,width*25/100);
+        rx=width-right-8;vx=left+14;vy=44;vw=Math.max(1,rx-vx-6);bottom=height-28;vh=Math.max(1,bottom-vy);listY=94;
         root=SchematicFiles.directory();
-        playerView=control("Креатив-мир",14,bottom-24,left-12,18,ExtraButton.Tone.ACCENT,"Открыть настоящий локальный мир. Доступно со стартового экрана",this::openPlayerView);
-        control("?",vx+vw-23,vy+4,17,16,QUIET,"Управление камерой и горячие клавиши",()->showHelp=!showHelp);
-        control("‹",8,10,20,22,QUIET,"Вернуться в меню Litematica (Esc)",this::close);
-        save=control("Сохранить",width-165,10,76,22,ExtraButton.Tone.ACCENT,"Сохранить новую копию схемы (Ctrl+S)",this::save);
-        place=control("В Litematica",width-83,10,75,22,NORMAL,"Сохранить копию и создать размещение у игрока",this::place);
-        control("F5",left-18,49,22,16,QUIET,"Обновить список схем",this::refresh);
-        search=addDrawableChild(new TextFieldWidget(textRenderer,14,69,left-12,18,Text.literal("Поиск схем")));
-        search.setPlaceholder(Text.literal("Поиск…"));search.setText(query);search.setEditableColor(TEXT);search.setChangedListener(s->{query=s;filter();});
-        replacement=addDrawableChild(new TextFieldWidget(textRenderer,rx+8,117,right-16,18,Text.literal("Новый блок")));
+        playerView=control(ExtraText.message("studio.creative"),14,bottom-24,left-12,18,NORMAL,ExtraText.message("studio.creative_tip"),this::openPlayerView);
+        control("?",vx+vw-23,vy+4,17,16,QUIET,ExtraText.message("studio.help"),()->showHelp=!showHelp);
+        control("←",8,10,20,22,QUIET,ExtraText.message("studio.back"),this::close);
+        save=control(ExtraText.message("save.submit"),width-165,10,76,22,ExtraButton.Tone.ACCENT,ExtraText.message("studio.save_tip"),this::save);
+        place=control(ExtraText.message("studio.place"),width-83,10,75,22,NORMAL,ExtraText.message("studio.place_tip"),this::place);
+        control("F5",left-18,49,22,16,QUIET,ExtraText.message("studio.refresh"),this::refresh);
+        search=addDrawableChild(new StudioField(studioFont,14,69,left-12,18,ExtraText.label("search")));
+        search.setPlaceholder(ExtraText.label("search.short"));search.setText(query);search.setEditableColor(TEXT);search.setChangedListener(s->{query=s;filter();});
+        replacement=addDrawableChild(new StudioField(studioFont,rx+8,117,right-16,18,ExtraText.label("studio.new_block")));
         replacement.setMaxLength(256);replacement.setText(blockInput);replacement.setEditableColor(TEXT);
-        replacement.setTooltip(Tooltip.of(Text.literal("ID блока: minecraft:stone\nСвойства: oak_stairs[facing=east,half=bottom]")));
+        replacement.setTooltip(Tooltip.of(ExtraText.label("studio.block_format")));
         replacement.setChangedListener(s->{blockInput=s;updateButtons();});
-        replace=control("Заменить блок",rx+8,141,right-16,19,ExtraButton.Tone.ACCENT,"Изменить выбранный блок",()->edit(false,false));
-        replaceAll=control("Заменить этот тип",rx+8,164,right-16,19,NORMAL,"Заменить все блоки с таким ID. Свойства будут взяты из поля выше",()->edit(true,false));
-        delete=control("Удалить блок",rx+8,187,right-16,19,DANGER,"Заменить выбранный блок воздухом (Delete)",()->edit(false,true));
-        int ty=bottom-24,tx=vx+6;
-        undo=control(vw>=156?"Отм.":"↶",tx,ty,28,18,QUIET,"Отменить (Ctrl+Z)",()->history(false));
-        redo=control(vw>=156?"Повт.":"↷",tx+32,ty,32,18,QUIET,"Повторить (Ctrl+Y)",()->history(true));
-        if(vw>=156){
-            control("Вид",tx+68,ty,32,18,NORMAL,"Сбросить камеру (Home)",preview::resetView);
-            control("−",tx+104,ty,18,18,QUIET,"Отдалить",()->preview.camera.zoomSteps(-1));
-            control("+",tx+126,ty,18,18,QUIET,"Приблизить",()->preview.camera.zoomSteps(1));
+        replace=control(ExtraText.message("studio.replace"),rx+8,141,right-16,19,NORMAL,ExtraText.message("studio.replace_tip"),()->edit(false,false));
+        replaceAll=control(ExtraText.message("studio.replace_type"),rx+8,164,right-16,19,NORMAL,ExtraText.message("studio.replace_type_tip"),()->edit(true,false));
+        delete=control(ExtraText.message("studio.delete"),rx+8,187,right-16,19,DANGER,ExtraText.message("studio.delete_tip"),()->edit(false,true));
+        int ty=bottom-23,tx=vx+6;
+        int zoomWidth=studioFont.getWidth("8000%")+8;
+        boolean wide=vw>=6+63+4+66+4+33+16+zoomWidth+16+6;
+        int undoWidth=wide?63:24, redoWidth=wide?66:24;
+        undo=control(wide?"↶ "+ExtraText.message("studio.undo_label"):"↶",tx,ty,undoWidth,18,QUIET,ExtraText.message("studio.undo"),()->history(false));
+        tx+=undoWidth+4;
+        redo=control(wide?"↷ "+ExtraText.message("studio.redo_label"):"↷",tx,ty,redoWidth,18,QUIET,ExtraText.message("studio.redo"),()->history(true));
+        tx+=redoWidth+4;
+        if(vw>=128){
+            control(ExtraText.message("studio.view"),tx,ty,29,18,NORMAL,ExtraText.message("studio.reset"),preview::resetView);
+            control("−",tx+33,ty,16,18,QUIET,ExtraText.message("studio.zoom_out"),()->preview.camera.zoomSteps(-1));
+            zoomLabelX=tx+49;
+            zoomLabelWidth=wide?zoomWidth:0;
+            control("+",zoomLabelX+(wide?zoomWidth:4),ty,16,18,QUIET,ExtraText.message("studio.zoom_in"),()->preview.camera.zoomSteps(1));
         }
         if(files.isEmpty())refresh();else filter();
         updateButtons();
     }
     private ExtraButton control(String label,int x,int y,int w,int h,ExtraButton.Tone tone,String tip,Runnable action){
-        ExtraButton b=addDrawableChild(new ExtraButton(label,x,y,w,h,tone,action));b.setTooltip(Tooltip.of(Text.literal(tip)));return b;
+        ExtraButton b=addDrawableChild(new ExtraButton(label,x,y,w,h,tone,action));b.useStudioTheme(studioFont);b.setTooltip(Tooltip.of(Text.literal(tip)));return b;
     }
     private void refresh(){
         files.clear();
@@ -98,11 +108,12 @@ public final class StudioScreen extends PlatformScreen {
     }
     void openPlayerView(){
         if(document==null)return;
-        try{NativeCreativeWorld.open(document,this);}catch(Exception e){error(e);}
+        client.setScreen(new CreativeEnvironmentScreen(this,(environment,physics,fallback)->
+                NativeCreativeWorld.open(document,environment,physics,fallback)));
     }
     void returnFromPlayerView(){
         selection=null;
-        try{preview.rebuild(document,true);info("Изменения Player View остались в схеме — можно сохранить копию");}catch(Exception e){error(e);}
+        try{preview.rebuild(document,true);info(ExtraText.message("studio.player_changes"));}catch(Exception e){error(e);}
         updateButtons();
     }
     private void load(Path path){
@@ -110,7 +121,7 @@ public final class StudioScreen extends PlatformScreen {
         guard(()->{
             try{
                 SchematicDocument loaded=new SchematicDocument(path);preview.rebuild(loaded,true);document=loaded;selection=null;
-                info("Открыта схема: "+displayName(path));
+                info(ExtraText.message("studio.opened",displayName(path)));
             }catch(Exception e){if(document!=null)try{preview.rebuild(document,true);}catch(Exception ignored){}error(e);}
             updateButtons();
         });
@@ -118,104 +129,119 @@ public final class StudioScreen extends PlatformScreen {
     private void guard(Runnable action){
         if(document==null||!document.dirty()){action.run();return;}
         client.setScreen(new ConfirmScreen(discard->{client.setScreen(this);if(discard)action.run();},
-                Text.literal("Есть несохранённые изменения"),Text.literal("Вернись и сохрани копию или отбрось изменения."),Text.literal("Отбросить"),Text.literal("Назад")));
+                ExtraText.label("studio.unsaved"),ExtraText.label("studio.unsaved_tip"),ExtraText.label("studio.discard"),ExtraText.label("back")));
     }
     private void edit(boolean all,boolean remove){
         if(document==null||selection==null)return;
         try{
             BlockState state=remove?Blocks.AIR.getDefaultState():WorldApi.parseBlock(blockInput);
-            if(document.state(selection).equals(state)){info("Этот блок уже выбранного типа");return;}
+            if(document.state(selection).equals(state)){info(ExtraText.message("studio.same"));return;}
             document.replace(selection,state,all);
             try{preview.rebuild(document,false);}catch(Exception failure){document.undo();preview.rebuild(document,false);throw failure;}
             if(remove||state.isAir())selection=null;
-            info(remove?"Блок удалён · Ctrl+Z — отменить":all?"Все блоки этого типа заменены":"Блок заменён · Ctrl+Z — отменить");
+            info(remove?ExtraText.message("studio.removed"):all?ExtraText.message("studio.replaced_type"):ExtraText.message("studio.replaced"));
         }catch(Exception e){error(e);}
         updateButtons();
     }
     private void history(boolean forward){
         if(document==null)return;
         if(forward)document.redo();else document.undo();
-        try{preview.rebuild(document,false);info(forward?"Действие повторено":"Действие отменено");}catch(Exception e){error(e);}
+        try{preview.rebuild(document,false);info(forward?ExtraText.message("studio.redone"):ExtraText.message("studio.undone"));}catch(Exception e){error(e);}
         selection=null;updateButtons();
     }
     private void save(){
         if(document==null)return;
-        try{Path saved=document.saveCopy();info("Копия сохранена: "+saved.getFileName());refresh();}catch(Exception e){error(e);}
+        try{Path saved=document.saveCopy();info(ExtraText.message("studio.copied",saved.getFileName().toString()));refresh();}catch(Exception e){error(e);}
     }
     private void place(){
         if(document==null||client.player==null||client.world==null)return;
         try{
             Path path=document.saveCopy();var schematic=SchematicDocument.loadSchematic(path);
-            if(schematic==null)throw new IllegalStateException("Не удалось загрузить сохранённую копию");
+            if(schematic==null)throw new IllegalStateException(ExtraText.message("studio.copy_failed"));
             SchematicHolder.getInstance().addSchematic(schematic,true);
             var manager=DataManager.getSchematicPlacementManager();
             var placement=SchematicPlacement.createFor(schematic,client.player.getBlockPos(),path.getFileName().toString(),true,true);
             manager.addSchematicPlacement(placement,true);manager.setSelectedSchematicPlacement(placement);
-            info("Копия сохранена и размещена у игрока");refresh();
+            info(ExtraText.message("studio.placed"));refresh();
         }catch(Exception e){error(e);}
     }
     private void info(String message){status=message;statusError=false;}
-    private void error(Exception e){status=e.getMessage()==null?"Не удалось выполнить действие":e.getMessage();statusError=true;LoggerFactory.getLogger("Litematica extra").warn("Editor operation failed",e);}
+    private void error(Exception e){status=e.getMessage()==null?ExtraText.message("studio.error"):e.getMessage();statusError=true;LoggerFactory.getLogger("Litematica extra").warn("Editor operation failed",e);}
     private String displayName(Path file){return file.getFileName().toString().replaceFirst("(?i)\\.litematic$","");}
     private String middleName(String name,int max){
-        if(textRenderer.getWidth(name)<=max)return name;
+        if(studioFont.getWidth(name)<=max)return name;
         int tail=Math.min(name.length(),8);
-        while(tail>1&&textRenderer.getWidth("…"+name.substring(name.length()-tail))>max-12)tail--;
+        while(tail>1&&studioFont.getWidth("…"+name.substring(name.length()-tail))>max-12)tail--;
         String end="…"+name.substring(name.length()-tail);
-        return textRenderer.trimToWidth(name,Math.max(0,max-textRenderer.getWidth(end)))+end;
+        return studioFont.trimToWidth(name,Math.max(0,max-studioFont.getWidth(end)))+end;
     }
-    private void text(DrawContext g,String s,int x,int y,int max,int color){g.drawText(textRenderer,textRenderer.trimToWidth(s,Math.max(1,max)),x,y,color,false);}
-    private void panel(DrawContext g,int x,int y,int w,int h){ExtraButton.round(g,x,y,w,h,BORDER);ExtraButton.round(g,x+1,y+1,w-2,h-2,PANEL);}
+    private void text(DrawContext g,String s,int x,int y,int max,int color){g.drawText(studioFont,studioFont.trimToWidth(s,Math.max(1,max)),x,y,color,false);}
+    private void panel(DrawContext g,int x,int y,int w,int h){StudioTheme.surface(g,x,y,w,h,PANEL,BORDER);}
     private void logo(DrawContext g,int x,int y,int size){Platform.texture(g,ICON,x,y,0,0,size,size,24,24,24,24);}
     @Override public void render(DrawContext g,int mouseX,int mouseY,float delta){
-        g.fill(0,0,width,height,BG);g.fill(0,0,width,38,0xff111a28);g.fill(8,37,width-8,38,BORDER);
-        logo(g,34,8,24);text(g,"Litematica extra",64,11,width-238,TEXT);text(g,"РЕДАКТОР СХЕМ",64,24,width-238,MUTED);
+        g.fill(0,0,width,height,BG);g.fill(0,0,width,38,0xff141920);g.fill(8,37,width-8,38,BORDER);
+        logo(g,34,8,24);text(g,"Litematica extra",64,11,width-238,TEXT);text(g,ExtraText.message("studio.title"),64,24,width-238,MUTED);
         panel(g,8,44,left,vh);panel(g,vx,vy,vw,vh);panel(g,rx,44,right,vh);
-        text(g,"СХЕМЫ",16,53,left-36,ACCENT);
+        text(g,ExtraText.message("studio.library"),16,53,left-36,ACCENT);
         int rows=visibleRows();
         g.enableScissor(12,listY-2,left+4,bottom-30);
         for(int i=0;i<rows&&i+listOffset<filtered.size();i++){
             Path p=filtered.get(i+listOffset);int y=listY+i*28;
             boolean active=document!=null&&document.source.equals(p),hover=mouseX>=12&&mouseX<left+4&&mouseY>=y-2&&mouseY<y+24;
-            if(active||hover)ExtraButton.round(g,12,y-2,left-8,26,active?0xff244841:0xff233247);
-            if(active)g.fill(12,y+2,14,y+20,ACCENT);
-            text(g,middleName(displayName(p),left-20),18,y+2,left-20,active?0xffb7ffee:TEXT);
-            String folder=root.relativize(p).getParent()==null?"Схема .litematic":root.relativize(p).getParent().toString();
-            text(g,folder,18,y+14,left-20,MUTED);
+            StudioTheme.surface(g,12,y-2,left-8,26,hover?0xff242e37:0xff171d24,active?ACCENT:0xff2a333e);
+            g.drawItem(new ItemStack(Blocks.STRUCTURE_BLOCK),16,y+2);
+            text(g,middleName(displayName(p),left-38),36,y+2,left-38,active?0xffb7ffee:TEXT);
+            String folder=root.relativize(p).getParent()==null?ExtraText.message("studio.file"):root.relativize(p).getParent().toString();
+            text(g,folder,36,y+14,left-38,MUTED);
         }
-        if(filtered.isEmpty())text(g,query.isBlank()?"Пока нет схем":"Ничего не найдено",16,listY+4,left-16,MUTED);
+        if(filtered.isEmpty())text(g,query.isBlank()?ExtraText.message("studio.empty"):ExtraText.message("studio.no_results"),16,listY+4,left-16,MUTED);
         g.disableScissor();
         g.enableScissor(vx+1,vy+1,vx+vw-1,bottom-1);
-        g.fill(vx+1,vy+1,vx+vw-1,bottom-1,0xff0c1420);
-        if(grid){
-            for(int x=vx+vw/2%16;x<vx+vw;x+=16)g.fill(x,vy+1,x+1,bottom-1,0xff162334);
-            for(int y=vy+vh/2%16;y<bottom;y+=16)g.fill(vx+1,y,vx+vw-1,y+1,0xff162334);
+        g.fill(vx+1,vy+1,vx+vw-1,bottom-1,0xff10151b);
+        if(grid&&document==null){
+            for(int x=vx+vw/2%16;x<vx+vw;x+=16)g.fill(x,vy+1,x+1,bottom-1,0xff1a222c);
+            for(int y=vy+vh/2%16;y<bottom;y+=16)g.fill(vx+1,y,vx+vw-1,y+1,0xff1a222c);
         }
-        if(document!=null){preview.draw(g,vx+1,vy+1,vw-2,vh-2,selection);Platform.nextLayer(g);}
-        else{logo(g,vx+vw/2-18,vy+vh/2-33,36);g.drawCenteredTextWithShadow(textRenderer,"Открой схему",vx+vw/2,vy+vh/2+12,TEXT);}
+        if(document!=null){preview.draw(g,vx+1,vy+23,vw-2,Math.max(1,vh-50),selection,grid);Platform.nextLayer(g);}
+        else{logo(g,vx+vw/2-18,vy+vh/2-33,36);String hint=ExtraText.message("studio.open");g.drawText(studioFont,hint,vx+(vw-studioFont.getWidth(hint))/2,vy+vh/2+12,TEXT,false);}
         g.disableScissor();
-        g.fill(vx+1,vy+1,vx+vw-1,vy+23,0xe8151e2b);g.fill(vx+1,bottom-27,vx+vw-1,bottom-1,0xe8151e2b);
-        text(g,document==null?"3D-ПРОСМОТР":displayName(document.source)+(document.dirty()?" *":""),vx+8,vy+8,vw-39,TEXT);
+        g.fill(vx+1,vy+1,vx+vw-1,vy+23,0xff191e26);g.fill(vx+1,bottom-27,vx+vw-1,bottom-1,0xff191e26);
+        text(g,ExtraText.message("studio.preview")+(document!=null&&document.dirty()?" *":""),vx+8,vy+8,vw-39,TEXT);
+        if(zoomLabelWidth>0&&vw>=128){
+            String zoom=Math.round(preview.camera.zoom*100)+"%";
+            g.drawText(studioFont,zoom,zoomLabelX+(zoomLabelWidth-studioFont.getWidth(zoom))/2,
+                    bottom-18,TEXT,false);
+        }
         if(showHelp){
             panel(g,vx+7,vy+28,vw-14,86);
-            String[] lines={"ЛКМ — выбрать блок","ПКМ / СКМ — вращать","Shift + ПКМ — сдвиг","Колесо — масштаб","Home — сброс камеры","G — показать сетку"};
+            String[] lines={ExtraText.message("studio.pick"),ExtraText.message("studio.orbit"),ExtraText.message("studio.pan"),ExtraText.message("studio.zoom"),ExtraText.message("studio.reset_key"),ExtraText.message("studio.grid")};
             for(int i=0;i<lines.length;i++)text(g,lines[i],vx+14,vy+35+i*12,vw-28,i==0?ACCENT:TEXT);
         }
-        text(g,"БЛОК",rx+8,53,right-16,ACCENT);
+        text(g,ExtraText.message("studio.block"),rx+8,53,right-16,ACCENT);
         if(document!=null&&selection!=null){
             var state=document.state(selection);g.drawItem(new ItemStack(state.getBlock()),rx+8,67);
             text(g,state.getBlock().getName().getString(),rx+29,69,right-37,TEXT);
-            text(g,Registries.BLOCK.getId(state.getBlock()).toString().replace("minecraft:",""),rx+29,81,right-37,MUTED);
+            text(g,Registries.BLOCK.getId(state.getBlock()).toString(),rx+29,81,right-37,MUTED);
             var p=selection.position();text(g,"X "+p.getX()+"   Y "+p.getY()+"   Z "+p.getZ(),rx+8,94,right-16,MUTED);
-        }else{text(g,"Выбери блок мышью",rx+8,73,right-16,TEXT);text(g,"ЛКМ по 3D-модели",rx+8,88,right-16,MUTED);}
-        text(g,"ЗАМЕНИТЬ НА",rx+8,106,right-16,MUTED);
+        }else{text(g,ExtraText.message("studio.pick_mouse"),rx+8,73,right-16,TEXT);text(g,ExtraText.message("studio.pick_model"),rx+8,88,right-16,MUTED);}
+        text(g,ExtraText.message("studio.replace_with"),rx+8,106,right-16,MUTED);
         if(height>=290){
-            g.fill(rx+8,218,rx+right-8,219,BORDER);text(g,"НАВИГАЦИЯ",rx+8,229,right-16,ACCENT);
-            text(g,"ПКМ / СКМ — вращать",rx+8,246,right-16,MUTED);text(g,"Shift + мышь — сдвиг",rx+8,260,right-16,MUTED);
-            if(height>=320)text(g,"Колесо — масштаб",rx+8,274,right-16,MUTED);
+            g.fill(rx+8,218,rx+right-8,219,BORDER);text(g,ExtraText.message("studio.navigation"),rx+8,229,right-16,ACCENT);
+            text(g,ExtraText.message("studio.orbit"),rx+8,246,right-16,MUTED);text(g,ExtraText.message("studio.pan_mouse"),rx+8,260,right-16,MUTED);
+            if(height>=320)text(g,ExtraText.message("studio.zoom"),rx+8,274,right-16,MUTED);
+        }
+        if(height>=350){
+            g.fill(rx+1,bottom-26,rx+right-1,bottom-25,0xff313942);
+            int chipX=rx+8;
+            for(String key:new String[]{"ПКМ / СКМ","Shift","↕"}){
+                int chipWidth=studioFont.getWidth(key)+8;
+                StudioTheme.surface(g,chipX,bottom-21,chipWidth,16,0xff202730,BORDER);
+                text(g,key,chipX+4,bottom-17,chipWidth-8,TEXT);
+                chipX+=chipWidth+5;
+            }
         }
         g.fill(10,height-16,13,height-13,statusError?0xfff18b9b:ACCENT);
-        String footer=status;if(document!=null&&!statusError)footer+="  ·  "+document.blockCount()+" блоков";
+        String footer=status;if(document!=null&&!statusError)footer+="  ·  "+ExtraText.message("studio.block_count",document.blockCount());
         text(g,footer,19,height-19,width-27,statusError?0xfff7a4b3:MUTED);
         super.render(g,mouseX,mouseY,delta);
         if(mouseX>=12&&mouseX<left+4&&mouseY>=listY-2&&mouseY<Math.min(bottom-30,listY+rows*28-2)){

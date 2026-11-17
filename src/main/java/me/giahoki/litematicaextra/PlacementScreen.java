@@ -20,7 +20,10 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.entity.Entity;
 import net.minecraft.text.Text;
 import net.minecraft.util.BlockRotation;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.*;
+import net.minecraft.world.RaycastContext;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFW;
@@ -29,9 +32,11 @@ import java.util.UUID;
 
 public final class PlacementScreen extends PlatformScreen {
     private static final Vec3d[] AXES={new Vec3d(1,0,0),new Vec3d(0,1,0),new Vec3d(0,0,1)};
-    private static final int[] COLORS={0xfff16d75,0xff8cda91,0xff6ea9ff};
+    private static final int[] COLORS={0xffff776c,0xffb4eb70,0xff51bfff};
     private static final String[] LABELS={"X","Y","Z"};
     private final SchematicPlacement placement;
+    private final InteractiveSelection selection;
+    private InteractiveSelection.Region dragRegion;
     private static final class CameraPlayer extends OtherClientPlayerEntity {
         float previousYaw;
         CameraPlayer(net.minecraft.client.world.ClientWorld world){super(world,new GameProfile(UUID.randomUUID(),"ExtraCamera"));}
@@ -51,29 +56,48 @@ public final class PlacementScreen extends PlatformScreen {
     private double speed=.45;
     private String feedback="";
     private Projection projection;
+    private net.minecraft.client.font.TextRenderer hudFont;
     private final Point[] tips=new Point[3];
     private Point pivotPoint;
     private Vec3d pivot;
-    private ButtonWidget done,cancel;
-    private boolean rotationMode,rotating,rDown;
-    private Vec3d dragPivot,centerOffset;
-    private BlockRotation dragRotation;
-    private double ringRadius,previousRingAngle,rotationDelta;
-    private final Point[] ring=new Point[64];
+    private boolean rDown;
+    private Vec3d dragPivot;
     private record Point(double x,double y){}
     private record Projection(Vec3d eye,Quaternionf rotation,double focal,int width,int height){
-        Point project(Vec3d p){
+        private Vector3f cameraSpace(Vec3d p){
             Vector3f v=new Vector3f((float)(p.x-eye.x),(float)(p.y-eye.y),(float)(p.z-eye.z));
-            new Quaternionf(rotation).conjugate().transform(v);
-            if(v.z>=-.05)return null;
+            return new Quaternionf(rotation).conjugate().transform(v);
+        }
+        private Point screenPoint(Vector3f v){
             return new Point(width*.5+v.x*focal/-v.z,height*.5-v.y*focal/-v.z);
+        }
+        Point project(Vec3d p){
+            Vector3f v=cameraSpace(p);
+            return v.z>=-.05f?null:screenPoint(v);
+        }
+        Point projectResizeTip(Vec3d start,Vec3d end){
+            Vector3f tip=cameraSpace(end);
+            if(tip.z<-.05f)return screenPoint(tip);
+            Vector3f origin=cameraSpace(start);
+            if(origin.z>=-.05f)return null;
+            origin.lerp(tip,(-.05f-origin.z)/(tip.z-origin.z));
+            origin.z=-.05f;
+            return screenPoint(origin);
         }
         Vec3d ray(double x,double y){
             Vector3f v=new Vector3f((float)((x-width*.5)/focal),(float)(-(y-height*.5)/focal),-1).normalize();
             rotation.transform(v);return new Vec3d(v.x,v.y,v.z).normalize();
         }
     }
-    private PlacementScreen(SchematicPlacement placement){super(Text.literal("Размещение"));this.placement=placement;}
+    private PlacementScreen(SchematicPlacement placement){
+        super(ExtraText.label(placement==null?"selection.title":"placement"));
+        this.placement=placement;
+        selection=placement==null?new InteractiveSelection():null;
+    }
+    public static void openSelection(){
+        var client=MinecraftClient.getInstance();
+        if(client.world!=null&&client.player!=null)client.setScreen(new PlacementScreen(null));
+    }
     public static PlacementScreen current(){return MinecraftClient.getInstance().currentScreen instanceof PlacementScreen s?s:null;}
     public SchematicPlacement placement(){return placement;}
     public boolean cursorShown(){return cursorShown;}
@@ -87,6 +111,12 @@ public final class PlacementScreen extends PlatformScreen {
         mc.setScreen(new PlacementScreen(p));
     }
     @Override protected void init(){
+        hudFont=studioFont(textRenderer);
+        if(finished&&camera!=null){
+            finished=false;
+            client.options.setPerspective(Perspective.FIRST_PERSON);
+            client.setCameraEntity(camera);
+        }
         if(camera==null){
             previousCamera=client.getCameraEntity();previousPerspective=client.options.getPerspective();
             camera=new CameraPlayer(client.world);
@@ -96,9 +126,36 @@ public final class PlacementScreen extends PlatformScreen {
             syncPrevious();client.options.setPerspective(Perspective.FIRST_PERSON);client.setCameraEntity(camera);
             KeyBinding.unpressAll();
         }
-        done=addDrawableChild(ButtonWidget.builder(Text.literal("Готово"),b->close()).dimensions(width-180,16,78,20).build());
-        cancel=addDrawableChild(ButtonWidget.builder(Text.literal("Отменить"),b->cancelPlacement()).dimensions(width-96,16,80,20).build());
+        if(selection!=null){
+            if(selection.regions.isEmpty())addRegion();
+            control("save.submit",12,this::saveSelection);
+            control("selection.add",35,this::addRegion);
+            control("selection.next",58,()->{cancelDrag();selection.selectNext();});
+            control("selection.remove",81,()->{cancelDrag();selection.remove();});
+            control("cancel",104,this::close);
+            applyCursor();
+            return;
+        }
+        addDrawableChild(ButtonWidget.builder(ExtraText.label("done"),b->close()).dimensions(width-180,16,78,20).build());
+        addDrawableChild(ButtonWidget.builder(ExtraText.label("cancel_action"),b->cancelPlacement()).dimensions(width-96,16,80,20).build());
         applyCursor();
+    }
+    private void control(String key,int y,Runnable action){
+        addDrawableChild(ButtonWidget.builder(ExtraText.label(key),b->action.run()).dimensions(width-116,y,104,20).build());
+    }
+    private void addRegion(){
+        cancelDrag();
+        Entity eye=selection.regions.isEmpty()?client.player:camera;
+        var hit=eye.raycast(16,1,false);
+        Vec3d target=hit.getType()==net.minecraft.util.hit.HitResult.Type.MISS
+                ?eye.getEyePos().add(eye.getRotationVec(1).multiply(7)):hit.getPos().subtract(eye.getRotationVec(1).multiply(.01));
+        selection.add(BlockPos.ofFloored(target).add(-1,0,-1),client.world.getBottomY(),
+                client.world.getBottomY()+client.world.getHeight());
+    }
+    private void saveSelection(){
+        cancelDrag();
+        client.setScreen(new SaveSchematicScreen(this,ExtraText.message("selection.filename"),
+                name->selection.save(client,name)));
     }
     private void syncPrevious(){
         camera.resetPosition();
@@ -115,10 +172,10 @@ public final class PlacementScreen extends PlatformScreen {
     }
     public void setCursorShown(boolean shown){
         if(cursorShown==shown)return;
-        dragAxis=-1;rotating=false;cursorShown=shown;if(shown)launchTick=12;velocity=Vec3d.ZERO;applyCursor();
+        dragAxis=-1;cursorShown=shown;if(shown)launchTick=12;velocity=Vec3d.ZERO;applyCursor();
     }
     private void applyCursor(){
-        done.visible=cancel.visible=cursorShown;
+        for(var child:children())if(child instanceof ButtonWidget button)button.visible=cursorShown;
         if(cursorShown){client.mouse.unlockCursor();return;}
         if(!client.isWindowFocused())return;
         // Mouse.lockCursor() closes the current screen. Capture without leaving this input surface.
@@ -142,6 +199,7 @@ public final class PlacementScreen extends PlatformScreen {
         if(placement.getRotation()==target)placement.setOrigin(origin,s->feedback=s);
     }
     private Vec3d center(){
+        if(selection!=null)return selection.active().center();
         BlockPos min=null,max=null;
         for(var box:placement.getSubRegionBoxes(SubRegionPlacement.RequiredEnabled.ANY).values()){
             var a=box.getPos1();var b=box.getPos2();
@@ -164,7 +222,7 @@ public final class PlacementScreen extends PlatformScreen {
         syncPrevious();
         boolean focused=client.isWindowFocused();long window=client.getWindow().getHandle();
         handleAlt(focused&&(GLFW.glfwGetKey(window,GLFW.GLFW_KEY_LEFT_ALT)==GLFW.GLFW_PRESS||GLFW.glfwGetKey(window,GLFW.GLFW_KEY_RIGHT_ALT)==GLFW.GLFW_PRESS));
-        if(!focused){velocity=Vec3d.ZERO;dragAxis=-1;rotating=false;rDown=false;return;}
+        if(!focused){velocity=Vec3d.ZERO;dragAxis=-1;rDown=false;return;}
         if(launchTick<12){
             double t=++launchTick/12.0;t=t*t*(3-2*t);
             camera.setPosition(launchFrom.lerp(launchTo,t));
@@ -191,37 +249,78 @@ public final class PlacementScreen extends PlatformScreen {
         double fov=((PlacementFovAccess)client.gameRenderer).extra$fov(c,delta,true);
         double focal=height/(2*Math.tan(Math.toRadians(MathHelper.clamp(fov,1,179))/2));
         projection=new Projection(Platform.cameraPosition(c),new Quaternionf(c.getRotation()),focal,width,height);
-        pivot=rotating?dragPivot:center();pivotPoint=projection.project(pivot);
+        pivot=center();pivotPoint=projection.project(pivot);
         double length=MathHelper.clamp(Platform.cameraPosition(c).distanceTo(pivot)*.22,1,128);
-        ringRadius=length;
-        if(rotationMode){
-            for(int i=0;i<ring.length;i++){
-                double angle=i*Math.TAU/ring.length;
-                ring[i]=projection.project(pivot.add(Math.cos(angle)*ringRadius,0,Math.sin(angle)*ringRadius));
+        boolean resizing=selection!=null&&selection.resize;
+        for(int i=0;i<3;i++){
+            double reach=length*.85;
+            if(resizing){
+                var max=selection.active().max();
+                double edge=switch(i){case 0->max.getX()+1-pivot.x;case 1->max.getY()+1-pivot.y;default->max.getZ()+1-pivot.z;};
+                reach+=edge;
             }
-            return;
+            Vec3d end=pivot.add(AXES[i].multiply(reach));
+            if(resizing&&pivotPoint!=null){
+                Point tip=projection.projectResizeTip(pivot,end);
+                double fraction=PlacementMath.resizeTipFraction(pivotPoint.x,pivotPoint.y,tip.x,tip.y,width,height,21);
+                tips[i]=new Point(MathHelper.lerp(fraction,pivotPoint.x,tip.x),MathHelper.lerp(fraction,pivotPoint.y,tip.y));
+            }else tips[i]=projection.project(end);
         }
-        for(int i=0;i<3;i++)tips[i]=projection.project(pivot.add(AXES[i].multiply(length)));
     }
     @Override public void render(DrawContext g,int mx,int my,float delta){
         updateProjection(delta);
-        int hover=cursorShown&&!rotationMode?hitAxis(mx,my):-1;
+        int hover=cursorShown?hitAxis(mx,my):-1;
+        BlockHitResult target=selection==null?null:selectionTarget(mx,my);
+        boolean inside=target!=null&&selection.contains(target.getBlockPos());
+        int targetColor=inside?StudioTheme.ACCENT:0xffffb568;
         if(pivotPoint!=null&&onScreen(pivotPoint,160)){
             var mesh=new SmoothGui();
-            if(rotationMode)drawRing(mesh,rotating||cursorShown&&hitRing(mx,my));
-            for(int i=0;!rotationMode&&i<3;i++)if(tips[i]!=null&&onScreen(tips[i],240)){
+            if(selection!=null)drawRegions(mesh,target,targetColor);
+            for(int i=0;i<3;i++){
                 Point a=pivotPoint,b=tips[i];boolean active=dragAxis==i||hover==i;
-                mesh.arrow(new SmoothGui.P(a.x,a.y),new SmoothGui.P(b.x,b.y),active?0xffffd083:COLORS[i],active);
-                Point label=labelPoint(a,b);mesh.disc(label.x,label.y,5.5,0xdf172733);
+                int ink=axisInk(i,active);
+                if(ink==0)continue;
+                if(selection!=null&&selection.resize){
+                    mesh.resizeHandle(new SmoothGui.P(a.x,a.y),new SmoothGui.P(b.x,b.y),ink,active);
+                }else mesh.arrow(new SmoothGui.P(a.x,a.y),new SmoothGui.P(b.x,b.y),ink,active);
+                Point label=labelPoint(a,b);
+                mesh.roundedBox(label.x,label.y,14,13,3,ink);
+                mesh.roundedBox(label.x,label.y,12,11,2,(ink&0xff000000)|0x1a242c);
             }
-            mesh.disc(pivotPoint.x,pivotPoint.y,3.2,0xffe1efef);mesh.disc(pivotPoint.x,pivotPoint.y,2.1,0xff263a46);
+            mesh.disc(pivotPoint.x,pivotPoint.y,4.2,0xff152029);
+            mesh.disc(pivotPoint.x,pivotPoint.y,3.2,0xffe1efef);
+            mesh.disc(pivotPoint.x,pivotPoint.y,2.2,0xff263a46);
+            mesh.disc(pivotPoint.x,pivotPoint.y,.8,StudioTheme.ACCENT);
             mesh.submit(g,new net.minecraft.client.gui.ScreenRect(0,0,width,height));
-            for(int i=0;!rotationMode&&i<3;i++)if(tips[i]!=null&&onScreen(tips[i],240)){
+            for(int i=0;i<3;i++){
+                int ink=axisInk(i,dragAxis==i||hover==i);
+                if(ink==0)continue;
                 Point label=labelPoint(pivotPoint,tips[i]);
-                g.drawText(textRenderer,LABELS[i],(int)Math.round(label.x)-3,(int)Math.round(label.y)-4,dragAxis==i||hover==i?0xffffd083:COLORS[i],false);
+                Platform.drawAxisLabel(g,hudFont,LABELS[i],(float)label.x,(float)label.y,1.0f,ink);
             }
         }
-        int panelRight=Math.min(width-192,312),textWidth=Math.max(60,panelRight-36);
+        if(selection!=null){
+            if(pivotPoint==null||!onScreen(pivotPoint,160)){
+                var mesh=new SmoothGui();
+                drawRegions(mesh,target,targetColor);
+                mesh.submit(g,new net.minecraft.client.gui.ScreenRect(0,0,width,height));
+            }
+            var region=selection.active();
+            int card=Math.min(width-132,236);
+            StudioTheme.surface(g,12,12,card,target==null?49:60,0xe61a242c,0xb0809aa3);
+            g.drawText(hudFont,hudFont.trimToWidth(ExtraText.message("selection.title"),card-12),18,18,StudioTheme.ACCENT,false);
+            g.drawText(hudFont,ExtraText.message("selection.region",selection.index+1,selection.regions.size(),
+                    region.max().getX()-region.min().getX()+1,region.max().getY()-region.min().getY()+1,
+                    region.max().getZ()-region.min().getZ()+1),18,32,StudioTheme.TEXT,false);
+            g.drawText(hudFont,ExtraText.message(selection.resize?"selection.resize":"selection.move"),18,46,StudioTheme.TEXT,false);
+            if(target!=null){
+                String status=ExtraText.message(inside?"selection.block_inside":"selection.block_outside");
+                g.drawText(hudFont,hudFont.trimToWidth(status,card-12),18,57,targetColor,false);
+            }
+            drawShortcuts(g,ExtraText.message("placement.fly"),ExtraText.message("selection.shortcuts"));
+            super.render(g,mx,my,delta);
+            return;
+        }
         BlockPos p=placement.getOrigin();
         int angle=switch(placement.getRotation()){
             case NONE -> 0;
@@ -229,127 +328,197 @@ public final class PlacementScreen extends PlatformScreen {
             case CLOCKWISE_180 -> 180;
             case COUNTERCLOCKWISE_90 -> 270;
         };
-        var coordinates=textRenderer.wrapLines(Text.literal("X "+p.getX()+"   Y "+p.getY()+"   Z "+p.getZ()+"   ·   Поворот "+angle+"°"),textWidth);
-        int panelBottom=53+coordinates.size()*11;
-        g.fill(12,12,panelRight,panelBottom,0xdf111e2a);g.fill(12,12,14,panelBottom,0xff89d9cb);
-        g.drawTextWithShadow(textRenderer,"РАЗМЕЩЕНИЕ",24,21,0xffa5eddf);
-        g.drawTextWithShadow(textRenderer,textRenderer.trimToWidth(placement.getName(),textWidth),24,37,0xffeeeeee);
-        for(int i=0;i<coordinates.size();i++)g.drawTextWithShadow(textRenderer,coordinates.get(i),24,52+i*11,0xffa4b6c6);
-        String mode=PlacementSettings.HOLD_ALT.getBooleanValue()?"Держи Alt — курсор":"Alt — курсор";
-        String first=dragAxis>=0?"Ось "+LABELS[dragAxis]+" · Шаг: 1 блок · ПКМ — отменить":cursorShown
-                ?(rotationMode?"ЛКМ + кольцо — поворот Y · Шаг: 90°":"ЛКМ + стрелка — двигать · Шаг: 1 блок")
-                :"WASD — полёт · Space / Shift — высота";
-        first+=" · R — "+(rotationMode?"перемещение":"поворот");
-        String second=cursorShown?(PlacementSettings.HOLD_ALT.getBooleanValue()?"Отпусти Alt — камера · Enter — готово":"Alt — камера · Enter / Esc — готово"):mode+" · Колесо — скорость · Esc — выход";
-        int wrapWidth=Math.max(60,Math.min(width-48,480));
-        var firstLines=textRenderer.wrapLines(Text.literal(first),wrapWidth);
-        var secondLines=textRenderer.wrapLines(Text.literal(second),wrapWidth);
-        int widest=0;
-        for(var line:firstLines)widest=Math.max(widest,textRenderer.getWidth(line));
-        for(var line:secondLines)widest=Math.max(widest,textRenderer.getWidth(line));
-        int box=Math.min(width-24,widest+24),x=(width-box)/2,top=height-12-16-(firstLines.size()+secondLines.size())*11;
-        g.fill(x,top,x+box,height-12,0xdf111e2a);
-        int y=top+8;
-        for(var line:firstLines){g.drawTextWithShadow(textRenderer,line,(width-textRenderer.getWidth(line))/2,y,0xffd7e6f0);y+=11;}
-        for(var line:secondLines){g.drawTextWithShadow(textRenderer,line,(width-textRenderer.getWidth(line))/2,y,0xff89d9cb);y+=11;}
-        if(!feedback.isEmpty())g.drawCenteredTextWithShadow(textRenderer,textRenderer.trimToWidth(feedback,width-32),width/2,panelBottom+8,0xffffca89);
-        if(pivotPoint==null||!onScreen(pivotPoint,0))g.drawCenteredTextWithShadow(textRenderer,"Центр схемы вне кадра",width/2,top-15,0xffc9d5df);
+        var coordinates=Text.empty();
+        int[] values={p.getX(),p.getY(),p.getZ()};
+        for(int i=0;i<3;i++){
+            int ink=COLORS[i]&0xffffff;
+            coordinates.append(Text.literal(LABELS[i]).styled(style->style.withColor(ink)))
+                    .append(" "+values[i]+"  ");
+        }
+        coordinates.append("↻ "+angle+"°");
+        String title=ExtraText.message("placement.title");
+        int textWidth=Math.min(Math.max(1,width-40),Math.max(hudFont.getWidth(coordinates),
+                Math.max(hudFont.getWidth(title)+16,Math.min(164,hudFont.getWidth(placement.getName())))));
+        var coordinateLines=hudFont.wrapLines(coordinates,textWidth);
+        int panelBottom=47+coordinateLines.size()*11;
+        StudioTheme.surface(g,12,12,textWidth+16,panelBottom-12,0xe61a242c,0xb0809aa3);
+        g.drawItem(new net.minecraft.item.ItemStack(net.minecraft.block.Blocks.STRUCTURE_BLOCK),18,16);
+        g.drawText(hudFont,title,36,20,StudioTheme.ACCENT,false);
+        g.drawText(hudFont,hudFont.trimToWidth(placement.getName(),textWidth),20,34,StudioTheme.TEXT,false);
+        for(int i=0;i<coordinateLines.size();i++)g.drawText(hudFont,coordinateLines.get(i),20,47+i*11,StudioTheme.TEXT,false);
+        String mode=PlacementSettings.HOLD_ALT.getBooleanValue()?ExtraText.message("placement.hold"):ExtraText.message("placement.alt");
+        String first=dragAxis>=0?ExtraText.message("placement.drag",LABELS[dragAxis]):cursorShown
+                ?ExtraText.message("placement.move")
+                :ExtraText.message("placement.fly");
+        first+=" · R — "+ExtraText.message("placement.switch_rotate")+" 90°";
+        String second=cursorShown?(PlacementSettings.HOLD_ALT.getBooleanValue()?ExtraText.message("placement.release"):ExtraText.message("placement.capture")):mode+ExtraText.message("placement.speed");
+        int top=drawShortcuts(g,first,second);
+        if(!feedback.isEmpty())g.drawCenteredTextWithShadow(hudFont,hudFont.trimToWidth(feedback,width-32),width/2,panelBottom+8,0xffffca89);
+        if(pivotPoint==null||!onScreen(pivotPoint,0))g.drawCenteredTextWithShadow(hudFont,ExtraText.message("placement.offscreen"),width/2,top-15,0xffc9d5df);
         super.render(g,mx,my,delta);
     }
+
+    private int drawShortcuts(DrawContext g,String first,String second){
+        var shortcuts=new java.util.ArrayList<String[]>();
+        int total=0;
+        for(String part:(first+" · "+second).split(" · ")){
+            String[] pair=part.split(" — ",2);
+            if(pair.length!=2){total=width;break;}
+            shortcuts.add(pair);
+            total+=hudFont.getWidth(pair[0])+hudFont.getWidth(pair[1])+18;
+        }
+        if(total+12<=width-24){
+            int top=height-33,x=(width-total-12)/2;
+            StudioTheme.surface(g,x,top,total+12,21,0xe61a242c,0xb0809aa3);
+            x+=6;
+            for(String[] pair:shortcuts){
+                int keyWidth=hudFont.getWidth(pair[0])+8;
+                StudioTheme.surface(g,x,top+4,keyWidth,13,0xff29363e,0xff60747d);
+                g.drawText(hudFont,pair[0],x+4,top+7,StudioTheme.TEXT,false);
+                g.drawText(hudFont,pair[1],x+keyWidth+4,top+7,0xffa5eddf,false);
+                x+=keyWidth+hudFont.getWidth(pair[1])+10;
+            }
+            return top;
+        }
+        int wrapWidth=Math.max(1,width-36);
+        var firstLines=hudFont.wrapLines(Text.literal(first),wrapWidth);
+        var secondLines=hudFont.wrapLines(Text.literal(second),wrapWidth);
+        int widest=0;
+        for(var line:firstLines)widest=Math.max(widest,hudFont.getWidth(line));
+        for(var line:secondLines)widest=Math.max(widest,hudFont.getWidth(line));
+        int box=Math.min(width-24,widest+24),x=(width-box)/2,top=height-12-16-(firstLines.size()+secondLines.size())*11;
+        StudioTheme.surface(g,x,top,box,height-12-top,0xe61a242c,0xb0809aa3);
+        int y=top+8;
+        for(var line:firstLines){g.drawText(hudFont,line,(width-hudFont.getWidth(line))/2,y,StudioTheme.TEXT,false);y+=11;}
+        for(var line:secondLines){g.drawText(hudFont,line,(width-hudFont.getWidth(line))/2,y,0xffa5eddf,false);y+=11;}
+        return top;
+    }
     private boolean onScreen(Point p,int margin){return p.x>=-margin&&p.x<=width+margin&&p.y>=-margin&&p.y<=height+margin;}
-    private void drawRing(SmoothGui mesh,boolean active){
-        int color=active?0xffffd083:COLORS[1];
-        for(int i=0;i<ring.length;i++){
-            Point a=ring[i],b=ring[(i+1)%ring.length];
-            if(a==null||b==null)continue;
-            double dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy);
-            if(len<.01)continue;
-            double nx=-dy/len*1.5,ny=dx/len*1.5;
-            mesh.quad(new SmoothGui.P(a.x+nx,a.y+ny),new SmoothGui.P(b.x+nx,b.y+ny),
-                    new SmoothGui.P(b.x-nx,b.y-ny),new SmoothGui.P(a.x-nx,a.y-ny),color);
-        }
+    private BlockHitResult selectionTarget(int mouseX,int mouseY){
+        if(client.world==null||camera==null)return null;
+        Vec3d ray=projection.ray(cursorShown?mouseX:width*.5,cursorShown?mouseY:height*.5);
+        var hit=client.world.raycast(new RaycastContext(projection.eye,projection.eye.add(ray.multiply(128)),
+                RaycastContext.ShapeType.OUTLINE,RaycastContext.FluidHandling.ANY,camera));
+        return hit.getType()==HitResult.Type.BLOCK?hit:null;
     }
-    private boolean hitRing(double x,double y){
-        for(int i=0;i<ring.length;i++){
-            Point a=ring[i],b=ring[(i+1)%ring.length];
-            if(a!=null&&b!=null&&PlacementMath.segmentDistance(x,y,a.x,a.y,b.x,b.y)<8)return true;
+    private SmoothGui.P[] boxCorners(BlockPos min,BlockPos max){
+        var corners=new SmoothGui.P[8];
+        for(int i=0;i<8;i++){
+            Point p=projection.project(new Vec3d((i&1)==0?min.getX():max.getX()+1,
+                    (i&2)==0?min.getY():max.getY()+1,(i&4)==0?min.getZ():max.getZ()+1));
+            if(p!=null)corners[i]=new SmoothGui.P(p.x,p.y);
         }
-        return false;
+        return corners;
     }
-    private double ringAngle(double x,double y,Vec3d center){
-        Vec3d ray=projection.ray(x,y);
-        if(Math.abs(ray.y)<1e-6)return Double.NaN;
-        double distance=(center.y-projection.eye.y)/ray.y;
-        if(distance<=0)return Double.NaN;
-        Vec3d offset=projection.eye.add(ray.multiply(distance)).subtract(center);
-        return Math.atan2(offset.z,offset.x);
+    private static void drawBoxFace(SmoothGui mesh,SmoothGui.P[] corners,int axis,int side,int color){
+        int u=axis==1?2:1,v=7^axis^u;
+        SmoothGui.P a=corners[side],b=corners[side|u],c=corners[side|u|v],d=corners[side|v];
+        if(a!=null&&b!=null&&c!=null&&d!=null)mesh.quad(a,b,c,d,color);
+    }
+    private static void drawEdge(SmoothGui mesh,SmoothGui.P a,SmoothGui.P b,double halfWidth,int color){
+        if(a==null||b==null)return;
+        double length=Math.hypot(b.x()-a.x(),b.y()-a.y());
+        if(length<.01)return;
+        double dx=(b.y()-a.y())*halfWidth/length,dy=(a.x()-b.x())*halfWidth/length;
+        mesh.quad(a.add(dx,dy),b.add(dx,dy),b.add(-dx,-dy),a.add(-dx,-dy),color);
+    }
+    private void drawRegions(SmoothGui mesh,BlockHitResult target,int targetColor){
+        for(int i=0;i<selection.regions.size();i++){
+            var region=selection.regions.get(i);
+            var min=region.min();var max=region.max();
+            var corners=boxCorners(min,max);
+            if(i==selection.index){
+                int tint=(StudioTheme.ACCENT&0xffffff)|0x26000000;
+                var eye=projection.eye;
+                if(eye.x<min.getX()||eye.x>max.getX()+1)drawBoxFace(mesh,corners,1,eye.x<min.getX()?0:1,tint);
+                if(eye.y<min.getY()||eye.y>max.getY()+1)drawBoxFace(mesh,corners,2,eye.y<min.getY()?0:2,tint);
+                if(eye.z<min.getZ()||eye.z>max.getZ()+1)drawBoxFace(mesh,corners,4,eye.z<min.getZ()?0:4,tint);
+            }
+            int ink=i==selection.index?StudioTheme.ACCENT:0xc0afb9ca;
+            for(int j=0;j<8;j++)for(int bit=1;bit<=4;bit*=2)
+                if((j&bit)==0)drawEdge(mesh,corners[j],corners[j|bit],1,ink);
+        }
+        if(target!=null){
+            var pos=target.getBlockPos();
+            var corners=boxCorners(pos,pos);
+            var side=target.getSide();
+            int axis=1<<side.getAxis().ordinal(),face=side.getDirection()==Direction.AxisDirection.POSITIVE?axis:0;
+            drawBoxFace(mesh,corners,axis,face,(targetColor&0xffffff)|0x44000000);
+            for(int j=0;j<8;j++)if((j&axis)==face)
+                for(int bit=1;bit<=4;bit*=2)if(bit!=axis&&(j&bit)==0)
+                    drawEdge(mesh,corners[j],corners[j|bit],.85,targetColor);
+        }
     }
     private void cancelDrag(){
-        if(rotating)rotate(dragRotation,dragOrigin);
-        else if(dragAxis>=0)placement.setOrigin(dragOrigin,s->feedback=s);
-        rotating=false;dragAxis=-1;
+        if(dragAxis>=0){
+            if(selection!=null)selection.regions.set(selection.index,dragRegion);
+            else placement.setOrigin(dragOrigin,s->feedback=s);
+        }
+        dragAxis=-1;
+    }
+    private void rotateClockwise(){
+        BlockPos origin=placement.getOrigin();
+        Vec3d offset=center().subtract(Vec3d.ofCenter(origin));
+        Vec3d shift=offset.subtract(offset.rotateY((float)(-Math.PI/2)));
+        rotate(placement.getRotation().rotate(BlockRotation.CLOCKWISE_90),
+                origin.add((int)Math.round(shift.x),0,(int)Math.round(shift.z)));
     }
     private int hitAxis(double x,double y){
         if(pivotPoint==null)return -1;
         int best=-1;double distance=9;
         for(int i=0;i<3;i++)if(tips[i]!=null){
             Point a=pivotPoint,b=tips[i];if(Math.hypot(a.x-b.x,a.y-b.y)<12)continue;
-            b=labelPoint(a,b);
-            double d=PlacementMath.segmentDistance(x,y,a.x,a.y,b.x,b.y);
+            double d;
+            if(selection!=null&&selection.resize)d=Math.hypot(x-b.x,y-b.y);
+            else{
+                b=labelPoint(a,b);
+                d=PlacementMath.segmentDistance(x,y,a.x,a.y,b.x,b.y);
+            }
             if(d<distance){distance=d;best=i;}
         }
         return best;
     }
     private static Point labelPoint(Point a,Point b){
-        double len=Math.hypot(b.x-a.x,b.y-a.y);
-        return len<1?b:new Point(b.x+(b.x-a.x)/len*11,b.y+(b.y-a.y)/len*11);
+        double offset=11/Math.hypot(b.x-a.x,b.y-a.y);
+        return new Point(b.x+(b.x-a.x)*offset,b.y+(b.y-a.y)*offset);
+    }
+    private int axisInk(int axis,boolean active){
+        Point tip=tips[axis];
+        if(tip==null||!onScreen(tip,240))return 0;
+        int alpha=PlacementMath.axisAlpha(Math.hypot(tip.x-pivotPoint.x,tip.y-pivotPoint.y));
+        return alpha==0?0:(alpha<<24)|(active?0xffd083:COLORS[axis]&0xffffff);
     }
     private static PlacementMath.V v(Vec3d a){return new PlacementMath.V(a.x,a.y,a.z);}
     private double parameter(double x,double y,int axis){return PlacementMath.axisParameter(v(projection.eye),v(projection.ray(x,y)),v(pivot),v(AXES[axis]));}
     @Override protected boolean onMouseClicked(double x,double y,int button,BooleanSupplier vanilla){
         if(!cursorShown)return true;
-        if(button==1&&(dragAxis>=0||rotating)){cancelDrag();return true;}
+        if(button==1&&dragAxis>=0){cancelDrag();return true;}
         if(vanilla.getAsBoolean())return true;
         if(button==0&&projection!=null){
-            if(rotationMode){
-                if(pivotPoint!=null&&hitRing(x,y)){
-                    double angle=ringAngle(x,y,pivot);
-                    if(Double.isFinite(angle)){
-                        dragPivot=pivot;dragOrigin=placement.getOrigin();dragRotation=placement.getRotation();
-                        centerOffset=dragPivot.subtract(Vec3d.ofCenter(dragOrigin));
-                        previousRingAngle=angle;rotationDelta=0;rotating=true;
-                    }
-                }
-                return true;
-            }
             int axis=hitAxis(x,y);
-            if(axis>=0){double t=parameter(x,y,axis);if(Double.isFinite(t)){dragOrigin=placement.getOrigin();dragPivot=pivot;dragParameter=t;dragAxis=axis;return true;}}
+            if(axis>=0){double t=parameter(x,y,axis);if(Double.isFinite(t)){
+                if(selection!=null)dragRegion=selection.active();
+                else dragOrigin=placement.getOrigin();
+                dragPivot=pivot;dragParameter=t;dragAxis=axis;return true;
+            }}
         }
         return true;
     }
     @Override protected boolean onMouseDragged(double x,double y,int button,double dx,double dy,BooleanSupplier vanilla){
-        if(button==0&&rotating){
-            double angle=ringAngle(x,y,dragPivot);
-            if(Double.isFinite(angle)){
-                rotationDelta+=Math.IEEEremainder(angle-previousRingAngle,Math.TAU);
-                previousRingAngle=angle;
-                int turns=Math.floorMod((int)Math.round(rotationDelta/(Math.PI/2)),4);
-                BlockRotation step=switch(turns){
-                    case 1 -> BlockRotation.CLOCKWISE_90;
-                    case 2 -> BlockRotation.CLOCKWISE_180;
-                    case 3 -> BlockRotation.COUNTERCLOCKWISE_90;
-                    default -> BlockRotation.NONE;
-                };
-                Vec3d shift=centerOffset.subtract(centerOffset.rotateY((float)(-turns*Math.PI/2)));
-                rotate(dragRotation.rotate(step),dragOrigin.add((int)Math.round(shift.x),0,(int)Math.round(shift.z)));
-            }
-            return true;
-        }
         if(button==0&&dragAxis>=0){
             var ray=projection.ray(x,y);
             double t=PlacementMath.axisParameter(v(projection.eye),v(ray),v(dragPivot),v(AXES[dragAxis]));
             if(Double.isFinite(t)){
                 int amount=PlacementMath.snapped(t-dragParameter);
+                if(selection!=null){
+                    var box=dragRegion.adjust(AXES[dragAxis],amount,selection.resize);
+                    if(box.min().getX()>=-29_999_984&&box.max().getX()<=29_999_984
+                            &&box.min().getZ()>=-29_999_984&&box.max().getZ()<=29_999_984
+                            &&box.min().getY()>=client.world.getBottomY()
+                            &&box.max().getY()<client.world.getBottomY()+client.world.getHeight())
+                        selection.regions.set(selection.index,box);
+                    return true;
+                }
                 BlockPos pos=dragOrigin.add((int)AXES[dragAxis].x*amount,(int)AXES[dragAxis].y*amount,(int)AXES[dragAxis].z*amount);
                 if(Math.abs((long)pos.getX())<=29_999_984&&Math.abs((long)pos.getZ())<=29_999_984)placement.setOrigin(pos,s->feedback=s);
             }
@@ -357,13 +526,18 @@ public final class PlacementScreen extends PlatformScreen {
         }
         return vanilla.getAsBoolean();
     }
-    @Override protected boolean onMouseReleased(double x,double y,int button,BooleanSupplier vanilla){if(button==0){dragAxis=-1;rotating=false;}return vanilla.getAsBoolean();}
+    @Override protected boolean onMouseReleased(double x,double y,int button,BooleanSupplier vanilla){if(button==0){dragAxis=-1;}return vanilla.getAsBoolean();}
     @Override public boolean mouseScrolled(double x,double y,double h,double vertical){speed=MathHelper.clamp(speed*Math.pow(1.2,vertical),.05,4);return true;}
     @Override protected boolean onKeyPressed(int key,int scan,int mods,BooleanSupplier vanilla){
         if(key==GLFW.GLFW_KEY_LEFT_ALT||key==GLFW.GLFW_KEY_RIGHT_ALT){handleAlt(true);return true;}
-        if(key==GLFW.GLFW_KEY_R){if(!rDown){cancelDrag();rotationMode=!rotationMode;rDown=true;}return true;}
-        if(key==GLFW.GLFW_KEY_ESCAPE&&(dragAxis>=0||rotating)){cancelDrag();return true;}
-        if(key==GLFW.GLFW_KEY_ENTER){close();return true;}
+        if(key==GLFW.GLFW_KEY_R){if(!rDown){
+            cancelDrag();
+            if(selection!=null)selection.resize=!selection.resize;
+            else rotateClockwise();
+            rDown=true;
+        }return true;}
+        if(key==GLFW.GLFW_KEY_ESCAPE&&dragAxis>=0){cancelDrag();return true;}
+        if(key==GLFW.GLFW_KEY_ENTER){if(selection!=null)saveSelection();else close();return true;}
         return vanilla.getAsBoolean();
     }
     @Override protected boolean onKeyReleased(int key,int scan,int mods,BooleanSupplier vanilla){if(key==GLFW.GLFW_KEY_R){rDown=false;return true;}if(key==GLFW.GLFW_KEY_LEFT_ALT||key==GLFW.GLFW_KEY_RIGHT_ALT){handleAlt(false);return true;}return vanilla.getAsBoolean();}

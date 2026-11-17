@@ -11,6 +11,9 @@ import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.TextIconButtonWidget;
+import net.minecraft.client.gui.tooltip.Tooltip;
+import net.minecraft.util.Identifier;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 
@@ -22,13 +25,33 @@ public final class ExtraClient implements ClientModInitializer {
         PlayerBlockBreakEvents.BEFORE.register((world,player,pos,state,entity)->!NativeCreativeWorld.isStarter(world,pos));
         ScreenEvents.AFTER_INIT.register((client,screen,w,h)->{
             if(screen instanceof TitleScreen){
-                int base=h/4+48;
-                for(var button:Screens.getButtons(screen))if(button.getWidth()==200&&button.getX()==w/2-100&&button.getY()>=base&&button.getY()<=base+48)button.setY(button.getY()-12);
-                Screens.getButtons(screen).add(ButtonWidget.builder(Text.literal("Litematica extra"),b->client.setScreen(new SchematicWorldSelectScreen(screen))).dimensions(w/2-100,base+60,200,20).build());
+                var buttons=Screens.getButtons(screen);
+                buttons.stream().filter(button->button.getMessage().equals(Text.translatable("menu.options")))
+                        .findFirst().ifPresent(options->{
+                            Text label=Text.literal("Litematica extra");
+                            var shortcut=TextIconButtonWidget.builder(label,
+                                            button->client.setScreen(new SchematicWorldSelectScreen(screen)),true)
+                                    .dimension(20,20)
+                                    .texture(Identifier.of("litematica_extra","title_shortcut"),14,14)
+                                    .build();
+                            int x=options.getX()-48;
+                            shortcut.setPosition(Math.max(2,x),options.getY()-(x<2?24:0));
+                            shortcut.setTooltip(Tooltip.of(label));
+                            buttons.add(shortcut);
+                        });
             }
             if(screen instanceof GameMenuScreen&&NativeCreativeWorld.isEditing()){
-                Screens.getButtons(screen).add(ButtonWidget.builder(Text.literal("Сохранить .litematic"),b->NativeCreativeWorld.promptSave(screen,false)).dimensions(8,8,149,20).build());
-                Screens.getButtons(screen).add(ButtonWidget.builder(Text.literal("Сохранить и выйти"),b->NativeCreativeWorld.promptSave(screen,true)).dimensions(163,8,149,20).build());
+                var buttons=Screens.getButtons(screen);
+                if(buttons.isEmpty())return;
+                Text physicsLabel=ExtraText.label("world.physics");
+                int physicsWidth=Math.max(64,client.textRenderer.getWidth(physicsLabel)+12);
+                int saveWidth=Math.min(149,(w-28-physicsWidth)/2);
+                buttons.add(ButtonWidget.builder(ExtraText.label("save.file"),b->NativeCreativeWorld.promptSave(screen,false)).dimensions(8,8,saveWidth,20).build());
+                buttons.add(ButtonWidget.builder(ExtraText.label("save.exit"),b->NativeCreativeWorld.promptSave(screen,true)).dimensions(14+saveWidth,8,saveWidth,20).build());
+                buttons.add(ButtonWidget.builder(physicsLabel,b->{
+                    CreativePhysics physics=NativeCreativeWorld.getPhysics();
+                    if(physics!=null)client.setScreen(new CreativePhysicsScreen(screen,physics));
+                }).dimensions(20+2*saveWidth,8,physicsWidth,20).build());
             }
         });
         ClientTickEvents.END_CLIENT_TICK.register(NativeCreativeWorld::clientTick);

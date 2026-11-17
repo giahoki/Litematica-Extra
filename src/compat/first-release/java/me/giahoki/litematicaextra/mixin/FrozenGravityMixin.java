@@ -22,11 +22,20 @@ public abstract class FrozenGravityMixin {
     private boolean extra$isGravityBlock(){var block=((BlockState)(Object)this).getBlock();return block instanceof FallingBlock||block instanceof DragonEggBlock;}
     @Inject(method="scheduledTick",at=@At("HEAD"),cancellable=true)
     private void extra$freezeGravity(ServerWorld world,BlockPos pos,Random random,CallbackInfo ci){
-        if(extra$isGravityBlock()&&NativeCreativeWorld.physicsFrozen(world))ci.cancel();
+        if(extra$isGravityBlock()&&NativeCreativeWorld.physicsFrozen(world)){
+            if(FallingBlock.canFallThrough(world.getBlockState(pos.down())))
+                world.scheduleBlockTick(pos,((BlockState)(Object)this).getBlock(),NativeCreativeWorld.PHYSICS_TICK_RETRY_DELAY);
+            ci.cancel();
+        }
     }
     @Inject(method="getStateForNeighborUpdate",at=@At("HEAD"),cancellable=true)
     private void extra$keepPowder(Direction direction,BlockState neighbor,WorldAccess world,BlockPos pos,BlockPos neighborPos,CallbackInfoReturnable<BlockState> cir){
-        if(extra$isGravityBlock()&&NativeCreativeWorld.physicsFrozen(world))cir.setReturnValue((BlockState)(Object)this);
+        if(extra$isGravityBlock()&&NativeCreativeWorld.physicsFrozen(world)){
+            BlockState state=(BlockState)(Object)this;
+            if(direction==Direction.DOWN&&FallingBlock.canFallThrough(neighbor))
+                world.scheduleBlockTick(pos,state.getBlock(),NativeCreativeWorld.PHYSICS_TICK_RETRY_DELAY);
+            cir.setReturnValue(state);
+        }
     }
     @Inject(method="getStateForNeighborUpdate",at=@At("RETURN"),cancellable=true)
     private void extra$keepUnsupportedBlock(Direction direction,BlockState neighbor,WorldAccess world,BlockPos pos,BlockPos neighborPos,CallbackInfoReturnable<BlockState> cir){

@@ -1,5 +1,7 @@
 package me.giahoki.litematicaextra.mixin;
 
+import me.giahoki.litematicaextra.ExtraText;
+
 import me.giahoki.litematicaextra.PlacementScreen;
 import me.giahoki.litematicaextra.ExtraIcons;
 import org.spongepowered.asm.mixin.Unique;
@@ -19,14 +21,15 @@ public abstract class PlacementLoadMixin extends GuiSchematicBrowserBase {
     @Override protected int getBrowserHeight(){return extra$browserHeight>0?extra$browserHeight:super.getBrowserHeight();}
     @Inject(method="initGui",at=@At("TAIL"),remap=false)
     private void extra$placement(CallbackInfo ci){
-        ButtonGeneric button=new ButtonGeneric(0,0,getStringWidth("Размещение")+30,20,"Размещение",ExtraIcons.PLACEMENT);
-        button.setHoverStrings("Загрузить голограмму и разместить её стрелками X / Y / Z из локальной фрикамеры");
+        String label=ExtraText.message("placement");
+        ButtonGeneric button=new ButtonGeneric(0,0,getStringWidth(label)+30,20,label,ExtraIcons.PLACEMENT);
+        button.setHoverStrings(ExtraText.message("placement.tip"));
         addButton(button,(b,mouse)->{
-            if(mc.world==null||mc.player==null){addMessage(MessageType.ERROR,"Сначала зайди в мир или на сервер");return;}
+            if(mc.world==null||mc.player==null){addMessage(MessageType.ERROR,ExtraText.message("placement.join"));return;}
             var list=getListWidget();var entry=list==null?null:list.getLastSelectedEntry();
-            if(entry==null){addMessage(MessageType.ERROR,"Выбери файл .litematic");return;}
+            if(entry==null){addMessage(MessageType.ERROR,ExtraText.message("placement.choose"));return;}
             var schematic=LitematicaSchematic.createFromFile(entry.getDirectory(),entry.getName());
-            if(schematic==null){addMessage(MessageType.ERROR,"Не удалось прочитать схему .litematic");return;}
+            if(schematic==null){addMessage(MessageType.ERROR,ExtraText.message("placement.read"));return;}
             PlacementScreen.open(schematic);
         });
         var access=(ExtraGuiAccess)this;var buttons=access.extra$buttons();
